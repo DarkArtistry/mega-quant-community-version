@@ -1,0 +1,36 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls:*)",
+      "Bash(git init:*)",
+      "Bash(npm install:*)",
+      "Bash(which forge:*)",
+      "Bash(tail:*)",
+      "Bash(forge install:*)",
+      "Bash(head:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx vite:*)",
+      "Bash(forge build:*)",
+      "Bash(forge test:*)",
+      "Bash(grep:*)",
+      "Bash(find:*)",
+      "Bash(wc:*)",
+      "WebSearch",
+      "WebFetch(domain:docs.coingecko.com)",
+      "WebFetch(domain:www.coingecko.com)",
+      "WebFetch(domain:api-docs.defillama.com)",
+      "WebFetch(domain:docs.llama.fi)",
+      "WebFetch(domain:developers.binance.com)",
+      "WebFetch(domain:docs.uniswap.org)",
+      "WebFetch(domain:coinmarketcap.com)",
+      "WebFetch(domain:docs.x.com)",
+      "WebFetch(domain:www.xpoz.ai)",
+      "WebFetch(domain:getlate.dev)",
+      "WebFetch(domain:twitterapi.io)",
+      "WebFetch(domain:elfsight.com)",
+      "Bash(cd:*)",
+      "Bash(node:*)",
+      "Bash(chmod +x:*)"
+    ]
+  }
+}

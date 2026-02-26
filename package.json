@@ -1,0 +1,97 @@
+{
+  "name": "mega-quant",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist-electron/main.js",
+  "description": "Enterprise Quant Trading Platform + Uniswap V4 Hooks",
+  "author": "MegaQuant Team",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "build:backend": "cd backend && npx tsc",
+    "build:all": "npm run build:backend && npm run build",
+    "preview": "vite preview",
+    "backend:dev": "cd backend && npm run dev",
+    "electron:dev": "concurrently -n \"backend,vite,electron\" -c \"yellow,green,blue\" \"npm run backend:dev\" \"vite\" \"sleep 3 && electron .\"",
+    "start": "npm run electron:dev",
+    "prepare:backend": "bash scripts/prepare-backend.sh",
+    "predist": "npm run build && npm run prepare:backend",
+    "dist": "electron-builder --mac",
+    "dist:dir": "electron-builder --mac --dir",
+    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0"
+  },
+  "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
+    "@radix-ui/react-dialog": "^1.1.2",
+    "@radix-ui/react-dropdown-menu": "^2.1.2",
+    "@radix-ui/react-label": "^2.1.0",
+    "@radix-ui/react-scroll-area": "^1.2.0",
+    "@radix-ui/react-select": "^2.1.2",
+    "@radix-ui/react-separator": "^1.1.0",
+    "@radix-ui/react-slot": "^1.1.0",
+    "@radix-ui/react-switch": "^1.1.1",
+    "@radix-ui/react-tabs": "^1.1.1",
+    "@radix-ui/react-tooltip": "^1.1.3",
+    "@tanstack/react-query": "^5.62.0",
+    "axios": "^1.7.9",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "cmdk": "^1.0.4",
+    "lightweight-charts": "^4.2.1",
+    "lucide-react": "^0.460.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwind-merge": "^2.5.5",
+    "zustand": "^5.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.1.0",
+    "electron": "^33.2.0",
+    "electron-builder": "^26.8.1",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.16",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3",
+    "vite-plugin-electron": "^0.29.0",
+    "vite-plugin-electron-renderer": "^0.14.6"
+  },
+  "build": {
+    "appId": "com.megaquant.app",
+    "productName": "MEGA QUANT",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "build/backend/",
+        "to": "backend",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "build/nodejs/",
+        "to": "nodejs",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "asar": true,
+    "mac": {
+      "target": "dmg",
+      "identity": null,
+      "category": "public.app-category.finance"
+    }
+  }
+}

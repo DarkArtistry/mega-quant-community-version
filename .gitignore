@@ -1,0 +1,21 @@
+node_modules/
+dist/
+dist-electron/
+release/
+build/
+*.db
+.env
+.env.local
+.DS_Store
+
+# Foundry
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+contracts/lib/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
