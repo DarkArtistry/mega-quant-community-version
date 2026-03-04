@@ -10,7 +10,7 @@ export interface LogEntry {
 const URL_REGEX = /(https?:\/\/[^\s),]+)/g
 const TX_HASH_IN_URL = /\/tx\/(0x[0-9a-fA-F]+)$/
 
-function linkifyMessage(message: string): ReactNode {
+export function linkifyMessage(message: string): ReactNode {
   const parts = message.split(URL_REGEX)
   if (parts.length === 1) return message
   return parts.map((part, i) => {
@@ -26,27 +26,42 @@ function linkifyMessage(message: string): ReactNode {
   })
 }
 
-const levelColors: Record<LogEntry['level'], string> = {
+export const levelColors: Record<LogEntry['level'], string> = {
   log: 'text-text-secondary',
   info: 'text-info',
   warn: 'text-warning',
   error: 'text-negative',
 }
 
-const levelLabels: Record<LogEntry['level'], string> = {
+export const levelLabels: Record<LogEntry['level'], string> = {
   log: 'LOG',
   info: 'INF',
   warn: 'WRN',
   error: 'ERR',
 }
 
-function formatTimestamp(iso: string): string {
+export function formatTimestamp(iso: string): string {
   try {
     const d = new Date(iso)
     return d.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
   } catch {
     return iso
   }
+}
+
+/** Single log line — reusable in both LogConsole and inline contexts */
+export function LogLine({ log }: { log: LogEntry }) {
+  return (
+    <div className="flex gap-2 py-px leading-relaxed">
+      <span className="text-text-tertiary shrink-0 tabular-nums select-none">
+        {formatTimestamp(log.timestamp)}
+      </span>
+      <span className={cn('shrink-0 font-semibold select-none', levelColors[log.level])}>
+        [{levelLabels[log.level]}]
+      </span>
+      <span className="text-text-secondary break-all whitespace-pre-wrap">{linkifyMessage(log.message)}</span>
+    </div>
+  )
 }
 
 interface LogConsoleProps {
@@ -67,26 +82,16 @@ export function LogConsole({ logs, className, maxHeight = '200px' }: LogConsoleP
     <div
       ref={scrollRef}
       className={cn(
-        'bg-background font-mono text-2xs overflow-auto',
+        'bg-background font-mono text-2xs overflow-auto overscroll-contain',
         className
       )}
-      style={{ maxHeight, height: maxHeight === '100%' ? '100%' : undefined }}
+      style={{ maxHeight }}
     >
       <div className="p-2 space-y-px">
         {logs.length === 0 ? (
           <div className="text-text-tertiary py-2 text-center">No logs yet</div>
         ) : (
-          logs.map((log, i) => (
-            <div key={i} className="flex gap-2 py-px leading-relaxed">
-              <span className="text-text-tertiary shrink-0 tabular-nums select-none">
-                {formatTimestamp(log.timestamp)}
-              </span>
-              <span className={cn('shrink-0 font-semibold select-none', levelColors[log.level])}>
-                [{levelLabels[log.level]}]
-              </span>
-              <span className="text-text-secondary break-all whitespace-pre-wrap">{linkifyMessage(log.message)}</span>
-            </div>
-          ))
+          logs.map((log, i) => <LogLine key={i} log={log} />)
         )}
         <div ref={bottomRef} />
       </div>

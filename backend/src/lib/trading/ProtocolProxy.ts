@@ -109,6 +109,8 @@ export abstract class ProtocolProxy {
     quote_price?: number
     // Block timestamp for accurate PnL time-series
     block_timestamp?: string
+    // Write-ahead intent order ID to clean up after successful recording
+    intentOrderId?: string | null
   }): Promise<void> {
     try {
       // --- Step 1: Post trade to API ---
@@ -279,6 +281,14 @@ export abstract class ProtocolProxy {
         orderManager.setLinkedOrderId(sellOrder.id, buyOrder.id)
 
         console.log(`[ProtocolProxy] Swap orders recorded: SELL ${tradeData.token_in_symbol} (${sellOrder.id}) ↔ BUY ${tradeData.token_out_symbol} (${buyOrder.id})`)
+
+        // Clean up write-ahead intent order now that proper orders are recorded
+        if (tradeData.intentOrderId) {
+          try {
+            const db = (await import('../../db/index.js')).getDatabase()
+            db.prepare('DELETE FROM orders WHERE id = ? AND status IN (?, ?)').run(tradeData.intentOrderId, 'submitted', 'pending')
+          } catch {}
+        }
       } catch (error: any) {
         console.warn(`[ProtocolProxy] Order manager recording failed:`, error.message)
       }

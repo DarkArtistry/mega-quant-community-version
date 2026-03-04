@@ -4,12 +4,14 @@ import { SkeletonTable } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { cn } from '@/components/ui/utils'
 import { Wallet, ArrowUpDown, ChevronDown, ChevronRight } from 'lucide-react'
+import { useAppStore } from '@/stores/useAppStore'
 import { pnlApi, type AccountPnlSummary } from '@/api/pnl'
 
 type SortField = 'account_name' | 'realized_pnl' | 'unrealized_pnl' | 'total_pnl' | 'positions_count'
 type SortDir = 'asc' | 'desc'
 
 export function AccountPnlTable() {
+  const { networkFilter } = useAppStore()
   const [isLoading, setIsLoading] = useState(true)
   const [accounts, setAccounts] = useState<AccountPnlSummary[]>([])
   const [sortField, setSortField] = useState<SortField>('total_pnl')
@@ -17,8 +19,9 @@ export function AccountPnlTable() {
   const [expandedId, setExpandedId] = useState<string | null>(null)
 
   const fetchData = useCallback(async () => {
+    const net = networkFilter !== 'all' ? networkFilter : undefined
     try {
-      const res = await pnlApi.getBreakdown()
+      const res = await pnlApi.getBreakdown(net)
       const data = res.data
       const accountSummaries: AccountPnlSummary[] = (data.byAccount || []).map((acct: any) => ({
         account_id: acct.accountId,
@@ -37,7 +40,7 @@ export function AccountPnlTable() {
     } finally {
       setIsLoading(false)
     }
-  }, [])
+  }, [networkFilter])
 
   useEffect(() => {
     fetchData()

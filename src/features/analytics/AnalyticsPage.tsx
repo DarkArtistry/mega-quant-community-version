@@ -1,24 +1,29 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { SkeletonCard, Skeleton, SkeletonTable } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/shared/EmptyState'
+import { NetworkFilter } from '@/components/shared/NetworkFilter'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
 import { BarChart3, ChevronDown, ChevronRight } from 'lucide-react'
 import { cn } from '@/components/ui/utils'
 import { AccountPnlTable } from '@/features/analytics/AccountPnlTable'
+import { PnlLineChart } from '@/components/charts/PnlLineChart'
+import { useAppStore } from '@/stores/useAppStore'
 import { pnlApi, type PnlBreakdown } from '@/api/pnl'
 import type { Position } from '@/types'
 
 export function AnalyticsPage() {
+  const { networkFilter } = useAppStore()
   const [isLoading, setIsLoading] = useState(true)
   const [breakdown, setBreakdown] = useState<PnlBreakdown | null>(null)
   const [hourlyData, setHourlyData] = useState<any[]>([])
 
   const fetchData = useCallback(async () => {
+    const net = networkFilter !== 'all' ? networkFilter : undefined
     try {
       const [breakdownRes, hourlyRes] = await Promise.allSettled([
-        pnlApi.getBreakdown(),
-        pnlApi.getHourly(168),
+        pnlApi.getBreakdown(net),
+        pnlApi.getHourly(168, undefined, undefined, net),
       ])
 
       if (breakdownRes.status === 'fulfilled') {
@@ -38,7 +43,7 @@ export function AnalyticsPage() {
     } finally {
       setIsLoading(false)
     }
-  }, [])
+  }, [networkFilter])
 
   useEffect(() => {
     fetchData()
@@ -55,10 +60,38 @@ export function AnalyticsPage() {
   const strategies = breakdown?.byStrategy || []
   const hasData = strategies.length > 0 || hourlyData.length > 0 || global.totalPnl !== 0
 
+  // Transform hourly snapshots into chart data
+  const hourlyChartData = useMemo(() => {
+    const points = hourlyData
+      .map((s: any) => ({
+        time: Math.floor(new Date(s.timestamp).getTime() / 1000) as any,
+        value: s.total_pnl_usd ?? s.totalPnl ?? 0,
+      }))
+      .sort((a: any, b: any) => a.time - b.time)
+      .filter((item: any, i: number, arr: any[]) => i === 0 || item.time > arr[i - 1].time)
+    return points
+  }, [hourlyData])
+
+  // Cumulative PnL chart: snapshots + current real-time PnL as latest point
+  const cumulativeChartData = useMemo(() => {
+    const points = [...hourlyChartData]
+    // Append current real-time PnL so the chart shows up-to-date values
+    if (global.totalPnl !== 0 || points.length > 0) {
+      const now = Math.floor(Date.now() / 1000) as any
+      if (points.length === 0 || now > points[points.length - 1].time) {
+        points.push({ time: now, value: global.totalPnl })
+      }
+    }
+    return points
+  }, [hourlyChartData, global.totalPnl])
+
   if (!isLoading && !hasData) {
     return (
       <div className="space-y-4">
-        <h2 className="text-lg font-semibold">Analytics</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold">Analytics</h2>
+          <NetworkFilter />
+        </div>
 
         <Tabs defaultValue="overview">
           <TabsList>
@@ -91,7 +124,10 @@ export function AnalyticsPage() {
 
   return (
     <div className="space-y-4">
-      <h2 className="text-lg font-semibold">Analytics</h2>
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold">Analytics</h2>
+        <NetworkFilter />
+      </div>
 
       <Tabs defaultValue="overview">
         <TabsList>
@@ -136,21 +172,23 @@ export function AnalyticsPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div className="h-[300px] rounded border border-border bg-surface p-3">
                   <h3 className="text-xs font-medium text-text-secondary mb-2">Hourly PnL</h3>
-                  {hourlyData.length === 0 ? (
+                  {hourlyChartData.length === 0 ? (
                     <div className="flex items-center justify-center h-full text-text-tertiary text-xs">
                       No hourly data yet
                     </div>
                   ) : (
-                    <div className="flex items-center justify-center h-full text-text-tertiary text-xs">
-                      {hourlyData.length} hourly snapshots
-                    </div>
+                    <PnlLineChart data={hourlyChartData} height={250} showArea={false} />
                   )}
                 </div>
                 <div className="h-[300px] rounded border border-border bg-surface p-3">
                   <h3 className="text-xs font-medium text-text-secondary mb-2">Cumulative PnL</h3>
-                  <div className="flex items-center justify-center h-full text-text-tertiary text-xs">
-                    {formatUsd(global.totalPnl)} total
-                  </div>
+                  {cumulativeChartData.length === 0 ? (
+                    <div className="flex items-center justify-center h-full text-text-tertiary text-xs">
+                      No data yet
+                    </div>
+                  ) : (
+                    <PnlLineChart data={cumulativeChartData} height={250} />
+                  )}
                 </div>
               </div>
             )}
@@ -286,15 +324,17 @@ interface StrategyEntry {
 }
 
 function StrategyPnlTable({ strategies }: { strategies: StrategyEntry[] }) {
+  const { networkFilter } = useAppStore()
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [positions, setPositions] = useState<Record<string, Position[]>>({})
 
   const toggle = async (strategyId: string) => {
+    const net = networkFilter !== 'all' ? networkFilter : undefined
     const isOpen = expanded[strategyId]
     setExpanded((prev) => ({ ...prev, [strategyId]: !isOpen }))
     if (!isOpen && !positions[strategyId]) {
       try {
-        const res = await pnlApi.getPositions(strategyId, undefined, 'open')
+        const res = await pnlApi.getPositions(strategyId, undefined, 'open', net)
         setPositions((prev) => ({ ...prev, [strategyId]: res.data.positions || [] }))
       } catch {
         setPositions((prev) => ({ ...prev, [strategyId]: [] }))
@@ -356,14 +396,14 @@ function StrategyPnlTable({ strategies }: { strategies: StrategyEntry[] }) {
                         <table className="w-full text-2xs">
                           <thead>
                             <tr className="text-text-tertiary">
-                              <th className="text-left py-1 font-medium">Asset</th>
-                              <th className="text-left py-1 font-medium">Side</th>
-                              <th className="text-right py-1 font-medium">Qty</th>
-                              <th className="text-right py-1 font-medium">Entry Price</th>
-                              <th className="text-right py-1 font-medium">Current</th>
-                              <th className="text-right py-1 font-medium">Realized</th>
-                              <th className="text-right py-1 font-medium">Unrealized</th>
-                              <th className="text-left py-1 font-medium">Protocol</th>
+                              <th className="text-left px-2 py-1 font-medium whitespace-nowrap">Asset</th>
+                              <th className="text-left px-2 py-1 font-medium whitespace-nowrap">Side</th>
+                              <th className="text-right px-2 py-1 font-medium whitespace-nowrap">Qty</th>
+                              <th className="text-right px-2 py-1 font-medium whitespace-nowrap">Entry Price</th>
+                              <th className="text-right px-2 py-1 font-medium whitespace-nowrap">Current</th>
+                              <th className="text-right px-2 py-1 font-medium whitespace-nowrap">Realized</th>
+                              <th className="text-right px-2 py-1 font-medium whitespace-nowrap">Unrealized</th>
+                              <th className="text-left px-2 py-1 font-medium whitespace-nowrap">Protocol</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -372,16 +412,16 @@ function StrategyPnlTable({ strategies }: { strategies: StrategyEntry[] }) {
                               const upnl = parseFloat(p.unrealized_pnl || '0')
                               return (
                                 <tr key={p.id} className="border-t border-border/50">
-                                  <td className="py-1 font-medium">{p.asset_symbol}</td>
-                                  <td className="py-1">
+                                  <td className="px-2 py-1 font-medium">{p.asset_symbol}</td>
+                                  <td className="px-2 py-1">
                                     <span className={p.side === 'long' ? 'text-positive' : 'text-negative'}>{p.side}</span>
                                   </td>
-                                  <td className="py-1 text-right font-mono">{formatQty(p.quantity)}</td>
-                                  <td className="py-1 text-right font-mono">{formatPrice(p.avg_entry_price)}</td>
-                                  <td className="py-1 text-right font-mono">{p.current_price ? formatPrice(p.current_price) : '—'}</td>
-                                  <td className="py-1 text-right"><PnlCell value={rpnl} /></td>
-                                  <td className="py-1 text-right"><PnlCell value={upnl} /></td>
-                                  <td className="py-1 text-text-secondary">{p.protocol || '—'}</td>
+                                  <td className="px-2 py-1 text-right font-mono">{formatQty(p.quantity)}</td>
+                                  <td className="px-2 py-1 text-right font-mono">{formatPrice(p.avg_entry_price)}</td>
+                                  <td className="px-2 py-1 text-right font-mono">{p.current_price ? formatPrice(p.current_price) : '—'}</td>
+                                  <td className="px-2 py-1 text-right"><PnlCell value={rpnl} /></td>
+                                  <td className="px-2 py-1 text-right"><PnlCell value={upnl} /></td>
+                                  <td className="px-2 py-1 text-text-secondary">{p.protocol || '—'}</td>
                                 </tr>
                               )
                             })}

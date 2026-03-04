@@ -1,14 +1,17 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { SkeletonCard, SkeletonTable, Skeleton } from '@/components/ui/skeleton'
+import { NetworkFilter } from '@/components/shared/NetworkFilter'
 import { PnlLineChart } from '@/components/charts/PnlLineChart'
 import { useLiveDataStore } from '@/stores/useLiveDataStore'
+import { useAppStore } from '@/stores/useAppStore'
 import { cn } from '@/components/ui/utils'
 import { pnlApi, type PnlBreakdown } from '@/api/pnl'
 import { WalletBalancesCard } from './WalletBalancesCard'
 import type { Position } from '@/types'
 
 export function DashboardPage() {
+  const { networkFilter } = useAppStore()
   const [isLoading, setIsLoading] = useState(true)
   const [positions, setPositions] = useState<Position[]>([])
   const [breakdown, setBreakdown] = useState<PnlBreakdown | null>(null)
@@ -17,12 +20,13 @@ export function DashboardPage() {
   const recentTrades = useLiveDataStore((s) => s.recentTrades)
 
   const fetchData = useCallback(async () => {
+    const net = networkFilter !== 'all' ? networkFilter : undefined
     try {
       const [totalRes, positionsRes, hourlyRes, breakdownRes] = await Promise.allSettled([
-        pnlApi.getTotal(),
-        pnlApi.getPositions(),
-        pnlApi.getHourly(24),
-        pnlApi.getBreakdown(),
+        pnlApi.getTotal(undefined, undefined, net),
+        pnlApi.getPositions(undefined, undefined, 'open', net),
+        pnlApi.getHourly(24, undefined, undefined, net),
+        pnlApi.getBreakdown(net),
       ])
 
       if (totalRes.status === 'fulfilled') {
@@ -54,7 +58,7 @@ export function DashboardPage() {
     } finally {
       setIsLoading(false)
     }
-  }, [])
+  }, [networkFilter])
 
   useEffect(() => {
     fetchData()
@@ -66,20 +70,34 @@ export function DashboardPage() {
   const accounts = breakdown?.byAccount || []
 
   const chartData = useMemo(() => {
-    return hourlyData
+    const points = hourlyData
       .map((snapshot: any) => ({
         time: Math.floor(new Date(snapshot.timestamp).getTime() / 1000) as any,
         value: snapshot.total_pnl_usd ?? snapshot.totalPnl ?? 0,
       }))
       .sort((a: any, b: any) => a.time - b.time)
       .filter((item: any, i: number, arr: any[]) => i === 0 || item.time > arr[i - 1].time)
-  }, [hourlyData])
+
+    // Append current real-time PnL as the latest data point so chart stays up-to-date
+    if (summary.totalPnl !== 0 || points.length > 0) {
+      const now = Math.floor(Date.now() / 1000) as any
+      // Only append if it's newer than the last snapshot
+      if (points.length === 0 || now > points[points.length - 1].time) {
+        points.push({ time: now, value: summary.totalPnl })
+      }
+    }
+
+    return points
+  }, [hourlyData, summary.totalPnl])
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold">Dashboard</h2>
-        <Badge variant="accent">Live</Badge>
+        <div className="flex items-center gap-2">
+          <NetworkFilter />
+          <Badge variant="accent">Live</Badge>
+        </div>
       </div>
 
       {/* Portfolio Summary Cards */}

@@ -45,9 +45,9 @@ export interface PnlBreakdown {
 
 export const pnlApi = {
   /** Hourly snapshots, filterable by strategy and/or account */
-  getHourly: (hours = 24, strategyId?: string, accountId?: string) =>
+  getHourly: (hours = 24, strategyId?: string, accountId?: string, network?: string) =>
     apiClient.get<{ success: boolean; snapshots: PnlSnapshot[] }>('/api/pnl/hourly', {
-      params: { hours, strategy_id: strategyId, account_id: accountId },
+      params: { hours, strategy_id: strategyId, account_id: accountId, network },
     }),
 
   /**
@@ -57,19 +57,21 @@ export const pnlApi = {
    *   - accountId: that account across all strategies
    *   - Both: specific intersection
    */
-  getTotal: (strategyId?: string, accountId?: string) =>
+  getTotal: (strategyId?: string, accountId?: string, network?: string) =>
     apiClient.get<{ success: boolean; summary: any; filters: any }>('/api/pnl/total', {
-      params: { strategy_id: strategyId, account_id: accountId },
+      params: { strategy_id: strategyId, account_id: accountId, network },
     }),
 
   /** Full PnL breakdown: global + by-strategy + by-account */
-  getBreakdown: () =>
-    apiClient.get<{ success: boolean } & PnlBreakdown>('/api/pnl/breakdown'),
+  getBreakdown: (network?: string) =>
+    apiClient.get<{ success: boolean } & PnlBreakdown>('/api/pnl/breakdown', {
+      params: { network },
+    }),
 
   /** Positions, filterable by strategy and/or account */
-  getPositions: (strategyId?: string, accountId?: string, status = 'open') =>
+  getPositions: (strategyId?: string, accountId?: string, status = 'open', network?: string) =>
     apiClient.get<{ success: boolean; positions: Position[] }>('/api/pnl/positions', {
-      params: { strategy_id: strategyId, account_id: accountId, status },
+      params: { strategy_id: strategyId, account_id: accountId, status, network },
     }),
 
   /** Per-account PnL via account-activity route */

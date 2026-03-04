@@ -2,11 +2,13 @@ import { useState, useEffect, useCallback } from 'react'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { SkeletonTable } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/shared/EmptyState'
+import { NetworkFilter } from '@/components/shared/NetworkFilter'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ClipboardList, ExternalLink, ChevronLeft, ChevronRight } from 'lucide-react'
 import { ordersApi } from '@/api/orders'
 import { strategiesApi } from '@/api/strategies'
+import { useAppStore } from '@/stores/useAppStore'
 import type { Order } from '@/types'
 
 const statusColors: Record<string, 'default' | 'positive' | 'warning' | 'negative'> = {
@@ -80,6 +82,7 @@ export function OrdersPage() {
   const [historyPage, setHistoryPage] = useState(0)
 
   // Filters
+  const { networkFilter } = useAppStore()
   const [strategies, setStrategies] = useState<Array<{ id: string; name: string }>>([])
   const [filterStrategy, setFilterStrategy] = useState<string>('')
 
@@ -94,10 +97,11 @@ export function OrdersPage() {
     try {
       const params: Record<string, any> = {}
       if (filterStrategy) params.strategy_id = filterStrategy
+      const net = networkFilter !== 'all' ? networkFilter : undefined
 
       const [pendingRes, historyRes] = await Promise.allSettled([
-        ordersApi.getAll({ ...params, status: 'pending' }),
-        ordersApi.getHistory({ limit: PAGE_SIZE, offset: historyPage * PAGE_SIZE, strategy_id: filterStrategy || undefined }),
+        ordersApi.getAll({ ...params, status: 'pending', network: net }),
+        ordersApi.getHistory({ limit: PAGE_SIZE, offset: historyPage * PAGE_SIZE, strategy_id: filterStrategy || undefined, network: net }),
       ])
 
       if (pendingRes.status === 'fulfilled') {
@@ -112,7 +116,7 @@ export function OrdersPage() {
     } finally {
       setIsLoading(false)
     }
-  }, [filterStrategy, historyPage])
+  }, [filterStrategy, historyPage, networkFilter])
 
   useEffect(() => {
     fetchOrders()
@@ -123,7 +127,7 @@ export function OrdersPage() {
   // Reset page when filter changes
   useEffect(() => {
     setHistoryPage(0)
-  }, [filterStrategy])
+  }, [filterStrategy, networkFilter])
 
   const totalHistoryPages = Math.ceil(historyTotal / PAGE_SIZE)
 
@@ -134,6 +138,7 @@ export function OrdersPage() {
 
         {/* Filters */}
         <div className="flex items-center gap-2">
+          <NetworkFilter />
           <select
             value={filterStrategy}
             onChange={(e) => setFilterStrategy(e.target.value)}

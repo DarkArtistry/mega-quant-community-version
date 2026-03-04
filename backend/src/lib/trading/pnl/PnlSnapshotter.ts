@@ -10,6 +10,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { pnlEngine } from './PnlEngine.js'
 import { pnlAggregator } from './PnlAggregator.js'
 import { priceService } from '../services/PriceService.js'
+import { buildPositionsNetworkFilter, type NetworkFilter } from '../../utils/network-filter.js'
 
 export class PnlSnapshotter {
   private intervalHandle: ReturnType<typeof setInterval> | null = null
@@ -72,10 +73,14 @@ export class PnlSnapshotter {
       console.warn('[PnlSnapshotter] Failed to refresh unrealized PnL:', error.message)
     }
 
-    // 1. Global snapshot (all accounts, all strategies)
+    // 1. Global snapshot (all accounts, all strategies, network='all')
     this.takeSnapshot()
 
-    // 2. Per-strategy snapshots
+    // 2. Network-specific global snapshots
+    this.takeNetworkSnapshot('mainnet')
+    this.takeNetworkSnapshot('testnet')
+
+    // 3. Per-strategy snapshots
     try {
       const db = getDatabase()
       const strategies = db.prepare(`
@@ -121,13 +126,13 @@ export class PnlSnapshotter {
       const snapshotId = uuidv4()
       const timestamp = new Date().toISOString()
 
-      // Global (or strategy-level) snapshot
+      // Global (or strategy-level) snapshot with network='all'
       db.prepare(`
         INSERT INTO pnl_snapshots (
           id, timestamp, strategy_id,
           total_value_usd, realized_pnl_usd, unrealized_pnl_usd,
-          total_pnl_usd, positions_count
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          total_pnl_usd, positions_count, network
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'all')
       `).run(
         snapshotId,
         timestamp,
@@ -152,6 +157,75 @@ export class PnlSnapshotter {
 
     } catch (error: any) {
       console.error('[PnlSnapshotter] Error taking snapshot:', error.message)
+    }
+  }
+
+  /**
+   * Take a network-filtered global snapshot (mainnet or testnet).
+   * Queries positions with the network filter to compute PnL for that network only.
+   */
+  private takeNetworkSnapshot(network: 'mainnet' | 'testnet'): void {
+    try {
+      const db = getDatabase()
+      const netFilter = buildPositionsNetworkFilter(network)
+
+      const row = db.prepare(`
+        SELECT
+          COALESCE(SUM(CAST(p.realized_pnl AS REAL)), 0) as total_realized,
+          COALESCE(SUM(CASE WHEN p.status = 'open' THEN CAST(COALESCE(p.unrealized_pnl, '0') AS REAL) ELSE 0 END), 0) as total_unrealized,
+          COUNT(CASE WHEN p.status = 'open' THEN 1 END) as open_count
+        FROM positions p
+        WHERE 1=1${netFilter.clause}
+      `).get(...netFilter.params) as any
+
+      const totalRealized = row.total_realized
+      const totalUnrealized = row.total_unrealized
+      const totalPnl = totalRealized + totalUnrealized
+      const openCount = row.open_count
+
+      // Calculate total value
+      const openPositions = db.prepare(`
+        SELECT p.quantity, p.current_price, p.avg_entry_price
+        FROM positions p
+        WHERE p.status = 'open'${netFilter.clause}
+      `).all(...netFilter.params) as any[]
+
+      let totalValueUsd = 0
+      for (const pos of openPositions) {
+        const qty = parseFloat(pos.quantity)
+        const price = parseFloat(pos.current_price || pos.avg_entry_price || '0')
+        totalValueUsd += qty * price
+      }
+
+      const snapshotId = uuidv4()
+      const timestamp = new Date().toISOString()
+
+      db.prepare(`
+        INSERT INTO pnl_snapshots (
+          id, timestamp, strategy_id,
+          total_value_usd, realized_pnl_usd, unrealized_pnl_usd,
+          total_pnl_usd, positions_count, network
+        ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?)
+      `).run(
+        snapshotId,
+        timestamp,
+        totalValueUsd,
+        totalRealized,
+        totalUnrealized,
+        totalPnl,
+        openCount,
+        network
+      )
+
+      console.log(
+        `[PnlSnapshotter] ${network} snapshot: ` +
+        `value=$${totalValueUsd.toFixed(2)}, ` +
+        `realized=$${totalRealized.toFixed(2)}, ` +
+        `unrealized=$${totalUnrealized.toFixed(2)}, ` +
+        `positions=${openCount}`
+      )
+    } catch (error: any) {
+      console.error(`[PnlSnapshotter] Error taking ${network} snapshot:`, error.message)
     }
   }
 

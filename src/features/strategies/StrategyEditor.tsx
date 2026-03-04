@@ -3,9 +3,10 @@ import Editor from '@monaco-editor/react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { LogConsole, type LogEntry } from '@/components/shared/LogConsole'
+import { LogLine, type LogEntry } from '@/components/shared/LogConsole'
+import { NetworkFilter } from '@/components/shared/NetworkFilter'
 import { AccountAssignmentPanel } from '@/features/settings/AccountAssignmentPanel'
-import { Play, Square, Pause, Save, ChevronUp } from 'lucide-react'
+import { Play, Square, Pause, Save, ChevronUp, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useAppStore } from '@/stores/useAppStore'
 import { strategyRunnerApi } from '@/api/strategy-runner'
 import { ordersApi } from '@/api/orders'
@@ -67,7 +68,7 @@ export function StrategyEditor({
   onCodeChange,
   onStatusChange,
 }: StrategyEditorProps) {
-  const { theme } = useAppStore()
+  const { theme, networkFilter } = useAppStore()
   const [code, setCode] = useState(initialCode)
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [dirty, setDirty] = useState(false)
@@ -80,8 +81,15 @@ export function StrategyEditor({
 
   // Trades & PnL state
   const [orders, setOrders] = useState<Order[]>([])
+  const [ordersTotal, setOrdersTotal] = useState(0)
+  const [ordersPage, setOrdersPage] = useState(0)
+  const TRADES_PAGE_SIZE = 50
   const [positions, setPositions] = useState<Position[]>([])
   const [pnlSummary, setPnlSummary] = useState<{ realized: number; unrealized: number; total: number } | null>(null)
+
+  // Console scroll
+  const consoleRef = useRef<HTMLDivElement>(null)
+  const shouldAutoScroll = useRef(true)
 
   // Resizable panel state
   const [bottomHeight, setBottomHeight] = useState(200)
@@ -220,23 +228,42 @@ export function StrategyEditor({
     return () => clearInterval(interval)
   }, [strategyId, status])
 
+  // Auto-scroll console to bottom (unless user scrolled up)
+  useEffect(() => {
+    const el = consoleRef.current
+    if (el && shouldAutoScroll.current) {
+      el.scrollTop = el.scrollHeight
+    }
+  }, [logs.length])
+
+  const handleConsoleScroll = useCallback(() => {
+    const el = consoleRef.current
+    if (!el) return
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+    shouldAutoScroll.current = atBottom
+  }, [])
+
   // Fetch orders and PnL for this strategy
   useEffect(() => {
     if (!strategyId) return
+    const net = networkFilter !== 'all' ? networkFilter : undefined
     const fetchTradesAndPnl = async () => {
       try {
         const [ordersRes, positionsRes, totalRes] = await Promise.allSettled([
-          ordersApi.getHistory({ strategy_id: strategyId, limit: 100 }),
-          pnlApi.getPositions(strategyId, undefined, 'open'),
-          pnlApi.getTotal(strategyId),
+          ordersApi.getHistory({ strategy_id: strategyId, limit: TRADES_PAGE_SIZE, offset: ordersPage * TRADES_PAGE_SIZE, network: net }),
+          pnlApi.getPositions(strategyId, undefined, 'open', net),
+          pnlApi.getTotal(strategyId, undefined, net),
         ])
-        if (ordersRes.status === 'fulfilled') setOrders(ordersRes.value.data.orders || [])
+        if (ordersRes.status === 'fulfilled') {
+          setOrders(ordersRes.value.data.orders || [])
+          setOrdersTotal((ordersRes.value.data as any).total || 0)
+        }
         if (positionsRes.status === 'fulfilled') setPositions(positionsRes.value.data.positions || [])
         if (totalRes.status === 'fulfilled') {
           const s = totalRes.value.data.summary
           setPnlSummary({
-            realized: s?.totalRealizedPnl ?? 0,
-            unrealized: s?.totalUnrealizedPnl ?? 0,
+            realized: s?.realizedPnl ?? s?.totalRealizedPnl ?? 0,
+            unrealized: s?.unrealizedPnl ?? s?.totalUnrealizedPnl ?? 0,
             total: s?.totalPnl ?? 0,
           })
         }
@@ -245,7 +272,9 @@ export function StrategyEditor({
     fetchTradesAndPnl()
     const interval = setInterval(fetchTradesAndPnl, 5000)
     return () => clearInterval(interval)
-  }, [strategyId, status])
+  }, [strategyId, status, ordersPage, networkFilter])
+
+  const totalOrdersPages = Math.ceil(ordersTotal / TRADES_PAGE_SIZE)
 
   const handleCodeChange = useCallback((value: string | undefined) => {
     if (value !== undefined) {
@@ -337,7 +366,7 @@ export function StrategyEditor({
       {/* Editor + Bottom Panel */}
       <div className="flex-1 flex flex-col min-h-0">
         {/* Monaco Editor */}
-        <div className="flex-1 min-h-[100px]">
+        <div className="flex-1 min-h-[100px] overflow-hidden relative z-0">
           <Editor
             height="100%"
             language="javascript"
@@ -368,158 +397,210 @@ export function StrategyEditor({
         />
 
         {/* Bottom Panel */}
-        <div style={{ height: bottomHeight }} className="shrink-0 flex flex-col">
+        <div style={{ height: bottomHeight }} className="shrink-0 flex flex-col relative z-10">
           <Tabs defaultValue="console" className="h-full flex flex-col">
-            <TabsList className="rounded-none border-b border-border bg-surface px-2 shrink-0">
-              <TabsTrigger value="console">Console</TabsTrigger>
-              <TabsTrigger value="trades">Trades</TabsTrigger>
-              <TabsTrigger value="pnl">PnL</TabsTrigger>
-              <TabsTrigger value="accounts">Accounts</TabsTrigger>
-            </TabsList>
+            <div className="flex items-center border-b border-border bg-surface shrink-0">
+              <TabsList className="rounded-none border-b-0 bg-transparent px-2">
+                <TabsTrigger value="console">Console</TabsTrigger>
+                <TabsTrigger value="trades">Trades</TabsTrigger>
+                <TabsTrigger value="pnl">PnL</TabsTrigger>
+                <TabsTrigger value="accounts">Accounts</TabsTrigger>
+              </TabsList>
+              <div className="flex-1" />
+              <NetworkFilter className="mr-2" />
+            </div>
 
-            <TabsContent value="console" className="flex-1 m-0 overflow-hidden">
-              <div className="h-full flex flex-col">
+            {/* Tab content area — relative container so each tab fills via absolute */}
+            <div className="flex-1 min-h-0 relative">
+              <TabsContent
+                value="console"
+                className="absolute inset-0 m-0 bg-background font-mono text-2xs"
+                style={{ overflowY: 'auto' }}
+                ref={consoleRef}
+                onScroll={handleConsoleScroll}
+              >
                 {hasMoreLogs && (
-                  <button
-                    onClick={loadMoreLogs}
-                    disabled={loadingMore}
-                    className="flex items-center justify-center gap-1 py-1 text-2xs text-text-tertiary hover:text-text-secondary bg-surface border-b border-border shrink-0"
-                  >
-                    <ChevronUp className="w-3 h-3" />
-                    {loadingMore ? 'Loading...' : 'Load older logs'}
-                  </button>
+                  <div className="sticky top-0 z-10">
+                    <button
+                      onClick={loadMoreLogs}
+                      disabled={loadingMore}
+                      className="flex items-center justify-center gap-1 py-1 w-full text-2xs text-text-tertiary hover:text-text-secondary bg-surface border-b border-border"
+                    >
+                      <ChevronUp className="w-3 h-3" />
+                      {loadingMore ? 'Loading...' : 'Load older logs'}
+                    </button>
+                  </div>
                 )}
-                <div className="flex-1 min-h-0">
-                  <LogConsole logs={logs} maxHeight="100%" className="h-full rounded-none border-0" />
-                </div>
-              </div>
-            </TabsContent>
-
-            <TabsContent value="trades" className="flex-1 m-0 overflow-auto">
-              {orders.length === 0 ? (
-                <div className="p-2 text-xs text-text-tertiary">No trades recorded</div>
-              ) : (
-                <table className="w-full text-2xs">
-                  <thead>
-                    <tr className="border-b border-border text-text-tertiary sticky top-0 bg-surface">
-                      <th className="text-left px-2 py-1 font-medium">Time</th>
-                      <th className="text-left px-2 py-1 font-medium">Side</th>
-                      <th className="text-left px-2 py-1 font-medium">Asset</th>
-                      <th className="text-right px-2 py-1 font-medium">Qty</th>
-                      <th className="text-right px-2 py-1 font-medium">Price</th>
-                      <th className="text-left px-2 py-1 font-medium">Protocol</th>
-                      <th className="text-left px-2 py-1 font-medium">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {orders.map((o) => (
-                      <tr key={o.id} className="border-b border-border last:border-b-0 hover:bg-background">
-                        <td className="px-2 py-1 text-text-secondary">{formatCompactTime(o.filled_at || o.updated_at)}</td>
-                        <td className="px-2 py-1">
-                          <span className={o.side === 'buy' ? 'text-positive' : 'text-negative'}>{o.side}</span>
-                        </td>
-                        <td className="px-2 py-1 font-medium">{formatOrderPair(o)}</td>
-                        <td className="px-2 py-1 text-right font-mono">{formatCompactQty(o.filled_quantity || o.quantity)}</td>
-                        <td className="px-2 py-1 text-right font-mono">{formatCompactPrice(o.filled_price || o.price)}</td>
-                        <td className="px-2 py-1 text-text-secondary">{o.protocol}</td>
-                        <td className="px-2 py-1">
-                          <Badge variant={o.status === 'filled' ? 'positive' : o.status === 'pending' ? 'warning' : 'default'}>
-                            {o.status}
-                          </Badge>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </TabsContent>
-
-            <TabsContent value="pnl" className="flex-1 m-0 overflow-auto">
-              {!pnlSummary && positions.length === 0 ? (
-                <div className="p-2 text-xs text-text-tertiary">Run strategy to see PnL</div>
-              ) : (
-                <div className="p-2 space-y-2">
-                  {/* PnL Summary */}
-                  {pnlSummary && (
-                    <div className="flex gap-4 text-2xs">
-                      <div>
-                        <span className="text-text-tertiary">Realized: </span>
-                        <span className={pnlSummary.realized > 0 ? 'text-positive' : pnlSummary.realized < 0 ? 'text-negative' : ''}>
-                          {formatPnlUsd(pnlSummary.realized)}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-text-tertiary">Unrealized: </span>
-                        <span className={pnlSummary.unrealized > 0 ? 'text-positive' : pnlSummary.unrealized < 0 ? 'text-negative' : ''}>
-                          {formatPnlUsd(pnlSummary.unrealized)}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-text-tertiary">Total: </span>
-                        <span className={`font-semibold ${pnlSummary.total > 0 ? 'text-positive' : pnlSummary.total < 0 ? 'text-negative' : ''}`}>
-                          {formatPnlUsd(pnlSummary.total)}
-                        </span>
-                      </div>
-                    </div>
+                <div className="p-2 space-y-px">
+                  {logs.length === 0 ? (
+                    <div className="text-text-tertiary py-2 text-center">No logs yet</div>
+                  ) : (
+                    logs.map((log, i) => <LogLine key={i} log={log} />)
                   )}
-                  {/* Positions */}
-                  {positions.length > 0 && (
-                    <table className="w-full text-2xs">
-                      <thead>
-                        <tr className="border-b border-border text-text-tertiary">
-                          <th className="text-left px-2 py-1 font-medium">Asset</th>
-                          <th className="text-left px-2 py-1 font-medium">Side</th>
-                          <th className="text-right px-2 py-1 font-medium">Qty</th>
-                          <th className="text-right px-2 py-1 font-medium">Entry</th>
-                          <th className="text-right px-2 py-1 font-medium">Current</th>
-                          <th className="text-right px-2 py-1 font-medium">Realized</th>
-                          <th className="text-right px-2 py-1 font-medium">Unrealized</th>
-                          <th className="text-left px-2 py-1 font-medium">Protocol</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {positions.map((p) => {
-                          const unrealized = parseFloat(p.unrealized_pnl || '0')
-                          const realized = parseFloat(p.realized_pnl || '0')
-                          return (
-                            <tr key={p.id} className="border-b border-border last:border-b-0 hover:bg-background">
-                              <td className="px-2 py-1 font-medium">{p.asset_symbol}</td>
+                </div>
+              </TabsContent>
+
+              <TabsContent value="trades" className="absolute inset-0 m-0 overflow-hidden">
+                <div className="h-full flex flex-col">
+                {orders.length === 0 ? (
+                  <div className="p-2 text-xs text-text-tertiary">No trades recorded</div>
+                ) : (
+                  <>
+                    <div className="flex-1 overflow-auto">
+                      <table className="w-full text-2xs">
+                        <thead>
+                          <tr className="border-b border-border text-text-tertiary sticky top-0 bg-surface">
+                            <th className="text-left px-2 py-1 font-medium">Time</th>
+                            <th className="text-left px-2 py-1 font-medium">Side</th>
+                            <th className="text-left px-2 py-1 font-medium">Asset</th>
+                            <th className="text-right px-2 py-1 font-medium">Qty</th>
+                            <th className="text-right px-2 py-1 font-medium">Price</th>
+                            <th className="text-left px-2 py-1 font-medium">Protocol</th>
+                            <th className="text-left px-2 py-1 font-medium">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {orders.map((o) => (
+                            <tr key={o.id} className="border-b border-border last:border-b-0 hover:bg-background">
+                              <td className="px-2 py-1 text-text-secondary">{formatCompactTime(o.filled_at || o.updated_at)}</td>
                               <td className="px-2 py-1">
-                                <span className={p.side === 'long' ? 'text-positive' : 'text-negative'}>{p.side}</span>
+                                <span className={o.side === 'buy' ? 'text-positive' : 'text-negative'}>{o.side}</span>
                               </td>
-                              <td className="px-2 py-1 text-right font-mono">{formatCompactQty(p.quantity)}</td>
-                              <td className="px-2 py-1 text-right font-mono">{formatCompactPrice(p.avg_entry_price)}</td>
-                              <td className="px-2 py-1 text-right font-mono">{p.current_price ? formatCompactPrice(p.current_price) : '—'}</td>
-                              <td className="px-2 py-1 text-right font-mono">
-                                <span className={realized > 0 ? 'text-positive' : realized < 0 ? 'text-negative' : 'text-text-tertiary'}>
-                                  {formatPnlUsd(realized)}
-                                </span>
+                              <td className="px-2 py-1 font-medium">{formatOrderPair(o)}</td>
+                              <td className="px-2 py-1 text-right font-mono">{formatCompactQty(o.filled_quantity || o.quantity)}</td>
+                              <td className="px-2 py-1 text-right font-mono">{formatCompactPrice(o.filled_price || o.price)}</td>
+                              <td className="px-2 py-1 text-text-secondary">{o.protocol}</td>
+                              <td className="px-2 py-1">
+                                <Badge variant={o.status === 'filled' ? 'positive' : o.status === 'pending' ? 'warning' : 'default'}>
+                                  {o.status}
+                                </Badge>
                               </td>
-                              <td className="px-2 py-1 text-right font-mono">
-                                <span className={unrealized > 0 ? 'text-positive' : unrealized < 0 ? 'text-negative' : 'text-text-tertiary'}>
-                                  {formatPnlUsd(unrealized)}
-                                </span>
-                              </td>
-                              <td className="px-2 py-1 text-text-secondary">{p.protocol || '—'}</td>
                             </tr>
-                          )
-                        })}
-                      </tbody>
-                    </table>
-                  )}
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    {totalOrdersPages > 1 && (
+                      <div className="flex items-center justify-between px-2 py-1 border-t border-border bg-surface shrink-0">
+                        <span className="text-2xs text-text-tertiary">
+                          Page {ordersPage + 1} of {totalOrdersPages} ({ordersTotal} trades)
+                        </span>
+                        <div className="flex items-center gap-1">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-5 px-1 text-2xs"
+                            disabled={ordersPage === 0}
+                            onClick={() => setOrdersPage((p) => p - 1)}
+                          >
+                            <ChevronLeft className="w-3 h-3" />
+                            Prev
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-5 px-1 text-2xs"
+                            disabled={ordersPage >= totalOrdersPages - 1}
+                            onClick={() => setOrdersPage((p) => p + 1)}
+                          >
+                            Next
+                            <ChevronRight className="w-3 h-3" />
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
                 </div>
-              )}
-            </TabsContent>
+              </TabsContent>
 
-            <TabsContent value="accounts" className="flex-1 m-0 overflow-auto">
-              {strategyId ? (
-                <AccountAssignmentPanel strategyId={strategyId} />
-              ) : (
-                <div className="p-3 text-xs text-text-tertiary">
-                  Save the strategy first to configure account assignments.
-                </div>
-              )}
-            </TabsContent>
+              <TabsContent value="pnl" className="absolute inset-0 m-0 overflow-auto">
+                {!pnlSummary && positions.length === 0 ? (
+                  <div className="p-2 text-xs text-text-tertiary">Run strategy to see PnL</div>
+                ) : (
+                  <div className="p-2 space-y-2">
+                    {/* PnL Summary */}
+                    {pnlSummary && (
+                      <div className="flex gap-4 text-2xs">
+                        <div>
+                          <span className="text-text-tertiary">Realized: </span>
+                          <span className={pnlSummary.realized > 0 ? 'text-positive' : pnlSummary.realized < 0 ? 'text-negative' : ''}>
+                            {formatPnlUsd(pnlSummary.realized)}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-text-tertiary">Unrealized: </span>
+                          <span className={pnlSummary.unrealized > 0 ? 'text-positive' : pnlSummary.unrealized < 0 ? 'text-negative' : ''}>
+                            {formatPnlUsd(pnlSummary.unrealized)}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-text-tertiary">Total: </span>
+                          <span className={`font-semibold ${pnlSummary.total > 0 ? 'text-positive' : pnlSummary.total < 0 ? 'text-negative' : ''}`}>
+                            {formatPnlUsd(pnlSummary.total)}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                    {/* Positions */}
+                    {positions.length > 0 && (
+                      <table className="w-full text-2xs">
+                        <thead>
+                          <tr className="border-b border-border text-text-tertiary">
+                            <th className="text-left px-2 py-1 font-medium">Asset</th>
+                            <th className="text-left px-2 py-1 font-medium">Side</th>
+                            <th className="text-right px-2 py-1 font-medium">Qty</th>
+                            <th className="text-right px-2 py-1 font-medium">Entry</th>
+                            <th className="text-right px-2 py-1 font-medium">Current</th>
+                            <th className="text-right px-2 py-1 font-medium">Realized</th>
+                            <th className="text-right px-2 py-1 font-medium">Unrealized</th>
+                            <th className="text-left px-2 py-1 font-medium">Protocol</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {positions.map((p) => {
+                            const unrealized = parseFloat(p.unrealized_pnl || '0')
+                            const realized = parseFloat(p.realized_pnl || '0')
+                            return (
+                              <tr key={p.id} className="border-b border-border last:border-b-0 hover:bg-background">
+                                <td className="px-2 py-1 font-medium">{p.asset_symbol}</td>
+                                <td className="px-2 py-1">
+                                  <span className={p.side === 'long' ? 'text-positive' : 'text-negative'}>{p.side}</span>
+                                </td>
+                                <td className="px-2 py-1 text-right font-mono">{formatCompactQty(p.quantity)}</td>
+                                <td className="px-2 py-1 text-right font-mono">{formatCompactPrice(p.avg_entry_price)}</td>
+                                <td className="px-2 py-1 text-right font-mono">{p.current_price ? formatCompactPrice(p.current_price) : '—'}</td>
+                                <td className="px-2 py-1 text-right font-mono">
+                                  <span className={realized > 0 ? 'text-positive' : realized < 0 ? 'text-negative' : 'text-text-tertiary'}>
+                                    {formatPnlUsd(realized)}
+                                  </span>
+                                </td>
+                                <td className="px-2 py-1 text-right font-mono">
+                                  <span className={unrealized > 0 ? 'text-positive' : unrealized < 0 ? 'text-negative' : 'text-text-tertiary'}>
+                                    {formatPnlUsd(unrealized)}
+                                  </span>
+                                </td>
+                                <td className="px-2 py-1 text-text-secondary">{p.protocol || '—'}</td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                )}
+              </TabsContent>
+
+              <TabsContent value="accounts" className="absolute inset-0 m-0 overflow-auto">
+                {strategyId ? (
+                  <AccountAssignmentPanel strategyId={strategyId} />
+                ) : (
+                  <div className="p-3 text-xs text-text-tertiary">
+                    Save the strategy first to configure account assignments.
+                  </div>
+                )}
+              </TabsContent>
+            </div>
           </Tabs>
         </div>
       </div>

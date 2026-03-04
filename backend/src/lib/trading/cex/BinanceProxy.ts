@@ -219,16 +219,42 @@ export class BinanceProxy {
     // Build query string for POST body
     const body = new URLSearchParams(queryParams).toString()
 
-    const response = await this.client.post('/api/v3/order', body, {
-      headers: {
-        'X-MBX-APIKEY': apiKey
+    // Write-ahead: record order intent BEFORE execution for crash resilience
+    let intentOrderId: string | null = null
+    try {
+      const intentOrder = orderManager.recordOrderIntent({
+        strategyId: this.strategyId,
+        orderType: params.type.toLowerCase() as 'market' | 'limit',
+        side: side === 'BUY' ? 'buy' : 'sell',
+        assetSymbol: params.symbol,
+        protocol: 'binance',
+        quantity: params.quantity.toString(),
+        price: params.price?.toString(),
+        accountId: this.accountId
+      })
+      intentOrderId = intentOrder.id
+    } catch (e: any) {
+      console.warn('[BinanceProxy] Failed to record order intent:', e.message)
+    }
+
+    let result: BinanceOrderResult
+    try {
+      const response = await this.client.post('/api/v3/order', body, {
+        headers: {
+          'X-MBX-APIKEY': apiKey
+        }
+      })
+      result = response.data as BinanceOrderResult
+    } catch (error: any) {
+      // Mark intent as failed if execution fails
+      if (intentOrderId) {
+        try { orderManager.updateOrderStatus(intentOrderId, 'failed') } catch {}
       }
-    })
+      throw error
+    }
 
-    const result = response.data as BinanceOrderResult
-
-    // Auto-record the trade via PnlEngine and OrderManager
-    this.recordTrade(result, side)
+    // Auto-record the trade via PnlEngine and OrderManager (replaces the intent)
+    this.recordTrade(result, side, intentOrderId)
 
     return result
   }
@@ -237,8 +263,18 @@ export class BinanceProxy {
    * Record a completed trade in the PnlEngine and OrderManager.
    * Records BOTH sides of the trade (sell token_in + buy token_out).
    */
-  private recordTrade(result: BinanceOrderResult, side: 'BUY' | 'SELL'): void {
+  private recordTrade(result: BinanceOrderResult, side: 'BUY' | 'SELL', intentOrderId?: string | null): void {
     try {
+      // Delete the write-ahead intent order — we'll create proper linked orders below
+      if (intentOrderId) {
+        try {
+          orderManager.updateOrderStatus(intentOrderId, 'filled', {
+            filledQuantity: result.executedQty,
+            filledPrice: (parseFloat(result.cummulativeQuoteQty) / parseFloat(result.executedQty)).toString(),
+            txHash: result.orderId.toString()
+          })
+        } catch {}
+      }
       const baseAsset = this.extractBaseAsset(result.symbol)
       const quoteAsset = this.extractQuoteAsset(result.symbol)
 

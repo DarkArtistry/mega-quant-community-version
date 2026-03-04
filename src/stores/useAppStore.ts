@@ -1,6 +1,8 @@
 import { create } from 'zustand'
 import type { Theme, AppScreen, BackendStatus } from '@/types'
 
+export type NetworkFilterValue = 'all' | 'mainnet' | 'testnet'
+
 interface AppState {
   // Auth
   isUnlocked: boolean
@@ -16,6 +18,9 @@ interface AppState {
   // Backend
   backendStatus: BackendStatus
 
+  // Network filter
+  networkFilter: NetworkFilterValue
+
   // Actions
   setUnlocked: (unlocked: boolean) => void
   setSetupComplete: (complete: boolean) => void
@@ -24,6 +29,7 @@ interface AppState {
   toggleTheme: () => void
   setActiveScreen: (screen: AppScreen) => void
   setBackendStatus: (status: Partial<BackendStatus>) => void
+  setNetworkFilter: (filter: NetworkFilterValue) => void
   lock: () => void
 }
 
@@ -38,6 +44,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     wsConnected: false,
     lastCheck: '',
   },
+  networkFilter: 'all',
 
   setUnlocked: (unlocked) => set({ isUnlocked: unlocked }),
   setSetupComplete: (complete) => set({ isSetupComplete: complete }),
@@ -60,6 +67,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => ({
       backendStatus: { ...state.backendStatus, ...status },
     })),
+
+  setNetworkFilter: (filter) => set({ networkFilter: filter }),
 
   lock: () =>
     set({

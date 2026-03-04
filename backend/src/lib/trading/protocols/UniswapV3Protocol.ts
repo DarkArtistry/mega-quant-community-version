@@ -139,10 +139,57 @@ export class UniswapV3Protocol extends ProtocolProxy {
         }
       }
 
-      // 7. Execute swap
+      // 7. Write-ahead: record order intent BEFORE execution for crash resilience
+      let intentOrderId: string | null = null
+      try {
+        const { orderManager } = await import('../orders/OrderManager.js')
+        const intentOrder = orderManager.recordOrderIntent({
+          strategyId: this.strategyId,
+          orderType: 'market',
+          side: 'sell',
+          assetSymbol: tokenInInfo.symbol,
+          assetAddress: tokenInInfo.address,
+          chainId: this.chainId,
+          protocol: this.protocol,
+          quantity: params.amountIn,
+          tokenInSymbol: tokenInInfo.symbol,
+          tokenInAmount: params.amountIn,
+          tokenOutSymbol: tokenOutInfo.symbol,
+          accountId: this.accountId
+        })
+        intentOrderId = intentOrder.id
+      } catch (e: any) {
+        console.warn('[UniswapV3] Failed to record order intent:', e.message)
+      }
+
+      // 8. Execute swap
       console.log('[UniswapV3] Executing swap...')
-      const tx = await this.routerContract.exactInputSingle(swapParams)
+      let tx: any
+      try {
+        tx = await this.routerContract.exactInputSingle(swapParams)
+      } catch (error: any) {
+        // Mark intent as failed if tx submission fails
+        if (intentOrderId) {
+          try {
+            const { orderManager } = await import('../orders/OrderManager.js')
+            orderManager.updateOrderStatus(intentOrderId, 'failed')
+          } catch {}
+        }
+        throw error
+      }
       console.log(`[UniswapV3] Transaction sent: ${tx.hash}`)
+
+      // Update intent with tx hash so reconciler can track it
+      if (intentOrderId) {
+        try {
+          const { orderManager } = await import('../orders/OrderManager.js')
+          orderManager.updateOrderStatus(intentOrderId, 'pending', {
+            filledQuantity: params.amountIn,
+            filledPrice: '0',
+            txHash: tx.hash
+          })
+        } catch {}
+      }
 
       // 8. Wait for confirmation
       const receipt = await tx.wait()
@@ -207,7 +254,8 @@ export class UniswapV3Protocol extends ProtocolProxy {
         slippage_percentage: slippageData.slippagePercentage,
         quote_price: slippageData.quotePrice,
         execution_price: slippageData.executionPrice,
-        block_timestamp: blockTimestamp
+        block_timestamp: blockTimestamp,
+        intentOrderId
       })
 
       // Build explorer URL

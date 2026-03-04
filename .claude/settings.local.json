@@ -72,7 +72,9 @@
       "WebFetch(domain:binance-docs.github.io)",
       "WebFetch(domain:insights.deribit.com)",
       "WebFetch(domain:support.deribit.com)",
-      "Bash(sqlite3 $DB_PATH:*)"
+      "Bash(sqlite3 $DB_PATH:*)",
+      "Bash(sqlite3:*)",
+      "Bash(npx tsx:*)"
     ]
   }
 }

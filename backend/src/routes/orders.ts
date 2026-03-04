@@ -9,6 +9,7 @@
 
 import express from 'express'
 import { getDatabase } from '../db/index.js'
+import { buildOrdersNetworkFilter, parseNetworkParam } from '../lib/utils/network-filter.js'
 
 const router = express.Router()
 
@@ -24,8 +25,9 @@ const router = express.Router()
  */
 router.get('/', (req, res) => {
   try {
-    const { strategy_id, status, limit = '100', offset = '0' } = req.query
+    const { strategy_id, status, limit = '100', offset = '0', network } = req.query
     const db = getDatabase()
+    const netFilter = buildOrdersNetworkFilter(parseNetworkParam(network))
 
     let sql = `
       SELECT o.*, s.name as strategy_name
@@ -45,6 +47,9 @@ router.get('/', (req, res) => {
       params.push(status)
     }
 
+    sql += netFilter.clause
+    params.push(...netFilter.params)
+
     sql += ' ORDER BY o.created_at DESC LIMIT ? OFFSET ?'
     params.push(parseInt(limit as string, 10) || 100)
     params.push(parseInt(offset as string, 10) || 0)
@@ -52,17 +57,19 @@ router.get('/', (req, res) => {
     const orders = db.prepare(sql).all(...params)
 
     // Get total count for pagination
-    let countSql = 'SELECT COUNT(*) as total FROM orders WHERE 1=1'
+    let countSql = 'SELECT COUNT(*) as total FROM orders o WHERE 1=1'
     const countParams: any[] = []
 
     if (strategy_id) {
-      countSql += ' AND strategy_id = ?'
+      countSql += ' AND o.strategy_id = ?'
       countParams.push(strategy_id)
     }
     if (status) {
-      countSql += ' AND status = ?'
+      countSql += ' AND o.status = ?'
       countParams.push(status)
     }
+    countSql += netFilter.clause
+    countParams.push(...netFilter.params)
 
     const countRow = db.prepare(countSql).get(...countParams) as { total: number }
 
@@ -92,8 +99,9 @@ router.get('/', (req, res) => {
  */
 router.get('/history', (req, res) => {
   try {
-    const { limit = '50', offset = '0', strategy_id } = req.query
+    const { limit = '50', offset = '0', strategy_id, network } = req.query
     const db = getDatabase()
+    const netFilter = buildOrdersNetworkFilter(parseNetworkParam(network))
 
     let sql = `
       SELECT o.*, s.name as strategy_name
@@ -108,6 +116,9 @@ router.get('/history', (req, res) => {
       params.push(strategy_id)
     }
 
+    sql += netFilter.clause
+    params.push(...netFilter.params)
+
     sql += ' ORDER BY o.updated_at DESC LIMIT ? OFFSET ?'
     params.push(parseInt(limit as string, 10) || 50)
     params.push(parseInt(offset as string, 10) || 0)
@@ -115,13 +126,15 @@ router.get('/history', (req, res) => {
     const orders = db.prepare(sql).all(...params)
 
     // Get total count for pagination
-    let countSql = "SELECT COUNT(*) as total FROM orders WHERE status IN ('filled', 'cancelled', 'expired')"
+    let countSql = "SELECT COUNT(*) as total FROM orders o WHERE o.status IN ('filled', 'cancelled', 'expired')"
     const countParams: any[] = []
 
     if (strategy_id) {
-      countSql += ' AND strategy_id = ?'
+      countSql += ' AND o.strategy_id = ?'
       countParams.push(strategy_id)
     }
+    countSql += netFilter.clause
+    countParams.push(...netFilter.params)
 
     const countRow = db.prepare(countSql).get(...countParams) as { total: number }
 

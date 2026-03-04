@@ -109,6 +109,72 @@ export interface Order {
 
 export class OrderManager {
   /**
+   * Record an order intent BEFORE execution (write-ahead for crash resilience).
+   * Creates the order with status='submitted' so it survives a crash.
+   * The reconciler will pick up 'submitted' orders on restart.
+   */
+  recordOrderIntent(data: OrderData & { txHash?: string }): Order {
+    const db = getDatabase()
+    const id = uuidv4()
+
+    db.prepare(`
+      INSERT INTO orders (
+        id, strategy_id, order_type, side, asset_symbol, asset_address,
+        chain_id, protocol, quantity, price, tick, status,
+        hook_order_id, deadline, account_id, linked_order_id,
+        instrument_type, position_side, leverage, reduce_only, margin_type,
+        option_type, strike_price, expiry, underlying_symbol,
+        lending_action, interest_rate_mode,
+        gas_cost_usd, gas_used, commission, commission_asset,
+        token_in_symbol, token_in_amount, token_out_symbol, token_out_amount,
+        slippage_percentage, block_number, tx_hash
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      data.strategyId,
+      data.orderType || 'market',
+      data.side,
+      data.assetSymbol,
+      data.assetAddress || null,
+      data.chainId || null,
+      data.protocol,
+      data.quantity,
+      data.price || null,
+      data.tick || null,
+      data.hookOrderId || null,
+      data.deadline || null,
+      data.accountId || null,
+      data.linkedOrderId || null,
+      data.instrumentType || 'spot',
+      data.positionSide || null,
+      data.leverage ?? null,
+      data.reduceOnly ? 1 : null,
+      data.marginType || null,
+      data.optionType || null,
+      data.strikePrice || null,
+      data.expiry || null,
+      data.underlyingSymbol || null,
+      data.lendingAction || null,
+      data.interestRateMode || null,
+      data.gasCostUsd ?? null,
+      data.gasUsed ?? null,
+      data.commission || null,
+      data.commissionAsset || null,
+      data.tokenInSymbol || null,
+      data.tokenInAmount || null,
+      data.tokenOutSymbol || null,
+      data.tokenOutAmount || null,
+      data.slippagePercentage ?? null,
+      data.blockNumber ?? null,
+      data.txHash || null
+    )
+
+    const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(id) as any
+    console.log(`[OrderManager] Intent recorded: ${id} (${data.side} ${data.quantity} ${data.assetSymbol} via ${data.protocol}) [submitted]`)
+    return this.mapRow(order)
+  }
+
+  /**
    * Record a new order in the database.
    */
   recordOrder(data: OrderData): Order {
@@ -178,7 +244,7 @@ export class OrderManager {
    */
   updateOrderStatus(
     orderId: string,
-    status: 'pending' | 'partial' | 'filled' | 'cancelled' | 'expired',
+    status: 'submitted' | 'pending' | 'partial' | 'filled' | 'cancelled' | 'expired' | 'failed',
     fillData?: OrderFillData
   ): Order | null {
     const db = getDatabase()
@@ -245,7 +311,7 @@ export class OrderManager {
 
     const rows = db.prepare(`
       SELECT * FROM orders
-      WHERE status IN ('pending', 'partial')
+      WHERE status IN ('submitted', 'pending', 'partial')
       ORDER BY created_at ASC
     `).all() as any[]
 

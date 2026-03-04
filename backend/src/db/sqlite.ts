@@ -1057,6 +1057,16 @@ function runMigrations() {
     console.error('Error fixing trade_fills:', e.message)
   }
 
+  // Add network column to pnl_snapshots for network-aware filtering
+  try {
+    db.exec(`ALTER TABLE pnl_snapshots ADD COLUMN network TEXT DEFAULT 'all'`)
+    console.log('Added column pnl_snapshots.network')
+  } catch (e: any) {
+    if (!e.message.includes('duplicate column name')) {
+      console.error('Error adding column pnl_snapshots.network:', e.message)
+    }
+  }
+
   // Extend portfolio_snapshots with lending_value_usd and account_id
   const portfolioSnapshotColumns = [
     'lending_value_usd REAL DEFAULT 0',

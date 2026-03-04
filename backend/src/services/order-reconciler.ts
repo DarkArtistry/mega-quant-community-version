@@ -83,10 +83,10 @@ export class OrderReconciler {
     try {
       const db = getDatabase()
 
-      // Get all pending/partial orders
+      // Get all submitted/pending/partial orders
       const pendingOrders = db.prepare(`
         SELECT * FROM orders
-        WHERE status IN ('pending', 'partial')
+        WHERE status IN ('submitted', 'pending', 'partial')
         ORDER BY created_at ASC
       `).all() as any[]
 
@@ -105,14 +105,17 @@ export class OrderReconciler {
           } else if (order.tx_hash && order.chain_id) {
             await this.reconcileDexOrder(order)
           } else {
-            // No tx_hash and not Binance — mark as expired if older than 1 hour
+            // No tx_hash and not Binance — expire based on status
             const createdAt = new Date(order.created_at + 'Z')
             const ageMs = Date.now() - createdAt.getTime()
-            if (ageMs > 3600_000) {
+            // 'submitted' orders with no tx_hash expire after 5 min (likely crashed before sending)
+            // 'pending' orders expire after 1 hour
+            const expireMs = order.status === 'submitted' ? 300_000 : 3600_000
+            if (ageMs > expireMs) {
               db.prepare(`
                 UPDATE orders SET status = 'expired', updated_at = datetime('now') WHERE id = ?
               `).run(order.id)
-              console.log(`[OrderReconciler] Expired stale order ${order.id} (no tx_hash, age: ${Math.round(ageMs / 60000)}min)`)
+              console.log(`[OrderReconciler] Expired stale order ${order.id} (status=${order.status}, no tx_hash, age: ${Math.round(ageMs / 60000)}min)`)
             }
           }
         } catch (err: any) {

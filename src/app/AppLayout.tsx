@@ -2,7 +2,6 @@ import { Sidebar } from '@/components/layout/Sidebar'
 import { TopBar } from '@/components/layout/TopBar'
 import { StatusBar } from '@/components/layout/StatusBar'
 import { useAppStore } from '@/stores/useAppStore'
-import { ScrollArea } from '@/components/ui/scroll-area'
 
 interface AppLayoutProps {
   children: React.ReactNode
@@ -16,9 +15,9 @@ export function AppLayout({ children }: AppLayoutProps) {
       <Sidebar activeScreen={activeScreen} onNavigate={setActiveScreen} />
       <div className="flex flex-col flex-1 min-w-0">
         <TopBar />
-        <ScrollArea className="flex-1">
+        <div className="flex-1 overflow-auto">
           <main className="p-4">{children}</main>
-        </ScrollArea>
+        </div>
         <StatusBar />
       </div>
     </div>
