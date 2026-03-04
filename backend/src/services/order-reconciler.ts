@@ -98,7 +98,9 @@ export class OrderReconciler {
 
       for (const order of pendingOrders) {
         try {
-          if (order.protocol === 'binance') {
+          if (order.protocol === 'binance-futures') {
+            await this.reconcileBinanceFuturesOrder(order)
+          } else if (order.protocol === 'binance') {
             await this.reconcileBinanceOrder(order)
           } else if (order.tx_hash && order.chain_id) {
             await this.reconcileDexOrder(order)
@@ -263,6 +265,71 @@ export class OrderReconciler {
         // Order not found — probably a different symbol format, skip
       } else {
         console.warn(`[OrderReconciler] Binance API error for order ${order.id}:`, err.message)
+      }
+    }
+  }
+  /**
+   * Check a Binance Futures order by querying the FAPI order status.
+   */
+  private async reconcileBinanceFuturesOrder(order: any): Promise<void> {
+    const apiKey = apiKeyStore.getBinanceApiKey()
+    const apiSecret = apiKeyStore.getBinanceApiSecret()
+    if (!apiKey || !apiSecret) return
+
+    const binanceOrderId = order.tx_hash
+    if (!binanceOrderId) return
+
+    const symbol = order.asset_symbol
+
+    try {
+      const isTestnet = apiKeyStore.isBinanceTestnet?.() ?? false
+      const baseUrl = isTestnet ? 'https://testnet.binancefuture.com' : 'https://fapi.binance.com'
+
+      const params: Record<string, string> = {
+        symbol: symbol.toUpperCase(),
+        orderId: binanceOrderId,
+        timestamp: Date.now().toString()
+      }
+
+      const queryString = new URLSearchParams(params).toString()
+      const signature = crypto.createHmac('sha256', apiSecret).update(queryString).digest('hex')
+      params.signature = signature
+
+      const response = await axios.get(`${baseUrl}/fapi/v1/order`, {
+        params,
+        headers: { 'X-MBX-APIKEY': apiKey },
+        timeout: 10_000
+      })
+
+      const futuresStatus = response.data.status as string
+      const db = getDatabase()
+
+      if (futuresStatus === 'FILLED') {
+        db.prepare(`
+          UPDATE orders
+          SET status = 'filled',
+              filled_quantity = ?,
+              filled_price = ?,
+              filled_at = datetime('now'),
+              updated_at = datetime('now')
+          WHERE id = ? AND status IN ('pending', 'partial')
+        `).run(
+          response.data.executedQty,
+          response.data.avgPrice || response.data.price,
+          order.id
+        )
+        console.log(`[OrderReconciler] Binance Futures order ${order.id} filled`)
+      } else if (futuresStatus === 'PARTIALLY_FILLED') {
+        db.prepare(`
+          UPDATE orders SET status = 'partial', filled_quantity = ?, updated_at = datetime('now') WHERE id = ?
+        `).run(response.data.executedQty, order.id)
+      } else if (['CANCELED', 'REJECTED', 'EXPIRED'].includes(futuresStatus)) {
+        db.prepare('UPDATE orders SET status = \'cancelled\', updated_at = datetime(\'now\') WHERE id = ?').run(order.id)
+        console.log(`[OrderReconciler] Binance Futures order ${order.id} ${futuresStatus.toLowerCase()}`)
+      }
+    } catch (err: any) {
+      if (err.response?.status !== 400) {
+        console.warn(`[OrderReconciler] Binance Futures API error for order ${order.id}:`, err.message)
       }
     }
   }

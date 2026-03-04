@@ -8,6 +8,8 @@
 import { getDatabase } from '../../../db/index.js'
 import { v4 as uuidv4 } from 'uuid'
 
+export type InstrumentType = 'spot' | 'perp' | 'option' | 'lending'
+
 export interface OrderData {
   strategyId: string
   orderType?: 'market' | 'limit' | 'stop'
@@ -23,6 +25,21 @@ export interface OrderData {
   hookOrderId?: string
   accountId?: string
   linkedOrderId?: string  // Links the other side of a swap (sell ↔ buy)
+  // Multi-instrument fields
+  instrumentType?: InstrumentType
+  // Perp fields
+  positionSide?: string   // 'LONG' | 'SHORT'
+  leverage?: number
+  reduceOnly?: boolean
+  marginType?: string     // 'CROSS' | 'ISOLATED'
+  // Option fields
+  optionType?: string     // 'CALL' | 'PUT'
+  strikePrice?: string
+  expiry?: string
+  underlyingSymbol?: string
+  // Lending fields
+  lendingAction?: string  // 'supply' | 'withdraw' | 'borrow' | 'repay'
+  interestRateMode?: string
   // Enriched detail fields
   gasCostUsd?: number
   gasUsed?: number
@@ -63,6 +80,18 @@ export interface Order {
   createdAt: string
   updatedAt: string
   accountId: string | null
+  // Multi-instrument fields
+  instrumentType: InstrumentType
+  positionSide: string | null
+  leverage: number | null
+  reduceOnly: boolean | null
+  marginType: string | null
+  optionType: string | null
+  strikePrice: string | null
+  expiry: string | null
+  underlyingSymbol: string | null
+  lendingAction: string | null
+  interestRateMode: string | null
   // Enriched detail fields
   gasCostUsd: number | null
   gasUsed: number | null
@@ -91,10 +120,13 @@ export class OrderManager {
         id, strategy_id, order_type, side, asset_symbol, asset_address,
         chain_id, protocol, quantity, price, tick, status,
         hook_order_id, deadline, account_id, linked_order_id,
+        instrument_type, position_side, leverage, reduce_only, margin_type,
+        option_type, strike_price, expiry, underlying_symbol,
+        lending_action, interest_rate_mode,
         gas_cost_usd, gas_used, commission, commission_asset,
         token_in_symbol, token_in_amount, token_out_symbol, token_out_amount,
         slippage_percentage, block_number
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       data.strategyId,
@@ -111,6 +143,17 @@ export class OrderManager {
       data.deadline || null,
       data.accountId || null,
       data.linkedOrderId || null,
+      data.instrumentType || 'spot',
+      data.positionSide || null,
+      data.leverage ?? null,
+      data.reduceOnly ? 1 : null,
+      data.marginType || null,
+      data.optionType || null,
+      data.strikePrice || null,
+      data.expiry || null,
+      data.underlyingSymbol || null,
+      data.lendingAction || null,
+      data.interestRateMode || null,
       data.gasCostUsd ?? null,
       data.gasUsed ?? null,
       data.commission || null,
@@ -297,6 +340,17 @@ export class OrderManager {
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       accountId: row.account_id,
+      instrumentType: row.instrument_type || 'spot',
+      positionSide: row.position_side,
+      leverage: row.leverage,
+      reduceOnly: row.reduce_only ? true : null,
+      marginType: row.margin_type,
+      optionType: row.option_type,
+      strikePrice: row.strike_price,
+      expiry: row.expiry,
+      underlyingSymbol: row.underlying_symbol,
+      lendingAction: row.lending_action,
+      interestRateMode: row.interest_rate_mode,
       gasCostUsd: row.gas_cost_usd,
       gasUsed: row.gas_used,
       commission: row.commission,

@@ -46,7 +46,16 @@ const sections: DocSection[] = [
   {
     title: 'CEX',
     id: 'cex',
-    items: [{ label: 'Binance Spot', id: 'binance-spot' }],
+    items: [
+      { label: 'Binance Spot', id: 'binance-spot' },
+      { label: 'Binance Futures', id: 'binance-futures' },
+      { label: 'Binance Options', id: 'binance-options' },
+    ],
+  },
+  {
+    title: 'DeFi Lending',
+    id: 'lending',
+    items: [{ label: 'Aave V3', id: 'aave-v3' }],
   },
   {
     title: 'Oracles',
@@ -84,6 +93,7 @@ const sections: DocSection[] = [
     items: [
       { label: 'How It Works', id: 'pnl-how' },
       { label: 'Query API', id: 'pnl-api' },
+      { label: 'Multi-Instrument PnL', id: 'pnl-multi-instrument' },
     ],
   },
   {
@@ -99,6 +109,9 @@ const sections: DocSection[] = [
       { label: 'Unichain Test', id: 'example-unichain' },
       { label: 'Binance Test', id: 'example-binance' },
       { label: 'Multi-Venue', id: 'example-multi-venue' },
+      { label: 'Perps Strategy', id: 'example-perps' },
+      { label: 'Options Strategy', id: 'example-options' },
+      { label: 'Lending Strategy', id: 'example-lending' },
     ],
   },
 ]
@@ -178,11 +191,17 @@ await dt.ethereum.uniswapV3.swap({ tokenIn: 'WETH', tokenOut: 'USDC', amountIn: 
 // DEX swap on Base via Uniswap V4
 await dt.base.uniswapV4.swap({ tokenIn: 'WETH', tokenOut: 'USDC', amountIn: '1.0' })
 
-// CEX order on Binance
+// CEX spot order on Binance
 await dt.binance.buy({ symbol: 'ETHUSDT', type: 'MARKET', quantity: 0.01 })
 
-// On-chain limit order via V4 Hook (see V4 Hooks section)
-// await dt.ethereum.uniswapV4.limitOrder({ ... }, megaQuantRouterAddress)
+// Perpetual futures (leveraged)
+await dt.binanceFutures.openLong({ symbol: 'ETHUSDT', quantity: 1, leverage: 10 })
+
+// Options trading
+await dt.binanceOptions.buyCall({ underlying: 'ETH', strikePrice: 4000, expiry: '2026-03-28', contracts: 5 })
+
+// DeFi lending (Aave V3)
+await dt.base.aave.supply({ asset: usdcAddress, assetSymbol: 'USDC', amount: '10000' })
 
 // Oracle price feed
 const price = await dt.ethereum.chainlink.getPrice('ETH/USD')`}
@@ -418,25 +437,36 @@ Binance: Connected
 │   ├── uniswapV3     //   .swap(), .getQuote()
 │   ├── uniswapV4     //   .swap(), .limitOrder(), .cancelLimitOrder()
 │   ├── oneInch       //   .swap(), .getQuote()
-│   └── chainlink     //   .getPrice()
+│   ├── chainlink     //   .getPrice()
+│   └── aave          //   .supply(), .withdraw(), .borrow(), .repay()
 ├── base              // Base (Chain ID: 8453)
-│   └── (same protocols)
+│   ├── (same DEX protocols)
+│   └── aave          //   Aave V3 lending
 ├── unichain          // Unichain (Chain ID: 130)
-│   └── (same protocols)
+│   └── (DEX protocols only)
 ├── sepolia           // Ethereum Sepolia testnet (Chain ID: 11155111)
-│   └── (same protocols)
+│   ├── (same DEX protocols)
+│   └── aave          //   Aave V3 testnet
 ├── ['base-sepolia']  // Base Sepolia testnet (Chain ID: 84532)
-│   └── (same protocols)
+│   └── (DEX protocols)
 ├── ['unichain-sepolia'] // Unichain Sepolia testnet (Chain ID: 1301)
-│   └── (same protocols)
-├── binance           // Binance CEX (spot trading)
+│   └── (DEX protocols)
+├── binance           // Binance Spot (CEX)
 │   ├── .getPrice(), .getOrderBook()
 │   ├── .buy(), .sell()
-│   ├── .cancelOrder(), .getOpenOrders()
-│   └── (auto-records all trades)
+│   └── .cancelOrder(), .getOpenOrders()
+├── binanceFutures    // Binance USDM Perpetual Futures
+│   ├── .openLong(), .closeLong()
+│   ├── .openShort(), .closeShort()
+│   ├── .setLeverage(), .setMarginType()
+│   └── .getPositions(), .getMarkPrice()
+├── binanceOptions    // Binance European Options
+│   ├── .buyCall(), .sellCall()
+│   ├── .buyPut(), .sellPut()
+│   └── .getMarkPrice(), .getPositions()
 ├── orders            // Read-only order queries
 │   └── .getAll(), .getPending(), .getHistory(), .getByAsset()
-├── pnl               // Read-only PnL queries
+├── pnl               // Read-only PnL queries (spot FIFO)
 │   └── .getHourly(), .getTotal(), .getPositions(), .getRealized()
 ├── getConfiguredChains()  // List which chains have accounts assigned
 └── close()                // End execution, capture final inventory`}
@@ -447,20 +477,16 @@ Binance: Connected
             <Code>dt.sepolia</Code> will be <Code>undefined</Code>. Always check before using.
           </p>
           <CodeBlock
-            title="Checking Available Chains"
+            title="Checking Available Chains & Venues"
             code={`async function execute(dt) {
   const chains = dt.getConfiguredChains()
-  console.log('Available:', chains) // e.g. ['sepolia', 'base-sepolia']
+  console.log('Available chains:', chains) // e.g. ['sepolia', 'base']
 
-  if (dt.sepolia) {
-    // Safe to use
-    await dt.sepolia.uniswapV3.swap(...)
-  }
-
-  if (dt.binance) {
-    // Binance is configured
-    await dt.binance.getPrice('ETHUSDT')
-  }
+  if (dt.sepolia) await dt.sepolia.uniswapV3.swap(...)
+  if (dt.binance) await dt.binance.getPrice('ETHUSDT')
+  if (dt.binanceFutures) await dt.binanceFutures.getMarkPrice('ETHUSDT')
+  if (dt.binanceOptions) await dt.binanceOptions.getMarkPrice('ETH-260328-4000-C')
+  if (dt.base?.aave) await dt.base.aave.getUserAccountData()
 }`}
           />
         </>
@@ -2033,6 +2059,535 @@ console.log('Net realized:', realizedPnl, '(fees:', totalFees, ')')`}
   }
 
   console.log("=== Multi-Venue Check Complete ===")
+}`}
+          />
+        </>
+      )
+
+    // ================================================================
+    // BINANCE FUTURES (PERPS)
+    // ================================================================
+    case 'binance-futures':
+      return (
+        <>
+          <DocHeader title="Binance Futures (Perps)" subtitle="dt.binanceFutures" />
+          <p className="text-xs text-text-secondary leading-relaxed mb-3">
+            Perpetual futures trading on Binance USDM Futures (<Code>fapi.binance.com</Code>).
+            Uses the same API key as Binance Spot. Each action creates a{' '}
+            <strong>single order</strong> (not linked pairs like spot swaps).
+          </p>
+          <p className="text-xs text-text-secondary leading-relaxed mb-4">
+            PnL formula: <Code>(exit - entry) × size × direction + funding - fees</Code>
+          </p>
+          <ApiMethod
+            name="openLong"
+            description="Open a leveraged long position. Automatically sets leverage and margin type if provided."
+            params={[
+              { name: 'symbol', type: 'string', desc: 'e.g. "ETHUSDT"' },
+              { name: 'quantity', type: 'number', desc: 'Position size in base asset' },
+              { name: 'leverage', type: 'number?', desc: 'Leverage multiplier (e.g. 10)' },
+              { name: 'marginType', type: 'string?', desc: '"CROSS" or "ISOLATED" (default: CROSS)' },
+            ]}
+            returns="FuturesOrderResult — { orderId, symbol, avgPrice, executedQty, status }"
+            example={`await dt.binanceFutures.openLong({
+  symbol: 'ETHUSDT',
+  quantity: 1,
+  leverage: 10,
+  marginType: 'CROSS'
+})`}
+          />
+          <ApiMethod
+            name="closeLong"
+            description="Close an existing long position (reduceOnly order)."
+            params={[
+              { name: 'symbol', type: 'string', desc: 'e.g. "ETHUSDT"' },
+              { name: 'quantity', type: 'number', desc: 'Amount to close' },
+            ]}
+            returns="FuturesOrderResult"
+            example={`await dt.binanceFutures.closeLong({ symbol: 'ETHUSDT', quantity: 1 })`}
+          />
+          <ApiMethod
+            name="openShort / closeShort"
+            description="Same interface as openLong/closeLong but for short positions."
+            params={[
+              { name: 'symbol', type: 'string', desc: 'Trading pair symbol' },
+              { name: 'quantity', type: 'number', desc: 'Position size' },
+            ]}
+            returns="FuturesOrderResult"
+            example={`await dt.binanceFutures.openShort({ symbol: 'BTCUSDT', quantity: 0.1, leverage: 5 })
+// ... later ...
+await dt.binanceFutures.closeShort({ symbol: 'BTCUSDT', quantity: 0.1 })`}
+          />
+          <ApiMethod
+            name="getPositions"
+            description="Get all open futures positions from Binance."
+            params={[{ name: 'symbol', type: 'string?', desc: 'Filter by symbol' }]}
+            returns="FuturesPosition[] — { symbol, positionAmt, entryPrice, markPrice, unRealizedProfit, liquidationPrice, leverage }"
+            example={`const positions = await dt.binanceFutures.getPositions('ETHUSDT')
+for (const p of positions) {
+  console.log(p.symbol, 'size:', p.positionAmt, 'PnL:', p.unRealizedProfit)
+}`}
+          />
+          <ApiMethod
+            name="getMarkPrice"
+            description="Get the current mark price, index price, and funding rate."
+            params={[{ name: 'symbol', type: 'string', desc: 'e.g. "ETHUSDT"' }]}
+            returns="{ markPrice, indexPrice, fundingRate }"
+            example={`const mark = await dt.binanceFutures.getMarkPrice('ETHUSDT')
+console.log('Mark:', mark.markPrice, 'Funding rate:', mark.fundingRate)`}
+          />
+          <h3 className="text-sm font-semibold mt-6 mb-2">Funding Payments</h3>
+          <p className="text-xs text-text-secondary leading-relaxed">
+            Funding payments are polled automatically every hour by the FundingTracker service
+            and recorded to the <Code>funding_payments</Code> table. They update{' '}
+            <Code>perp_positions.total_funding</Code> and are included in the PnL calculation.
+          </p>
+        </>
+      )
+
+    // ================================================================
+    // BINANCE OPTIONS
+    // ================================================================
+    case 'binance-options':
+      return (
+        <>
+          <DocHeader title="Binance Options" subtitle="dt.binanceOptions" />
+          <p className="text-xs text-text-secondary leading-relaxed mb-3">
+            European-style options on Binance (<Code>eapi.binance.com</Code>).
+            Uses the same API key as Binance Spot. Each action creates a{' '}
+            <strong>single order</strong>.
+          </p>
+          <p className="text-xs text-text-secondary leading-relaxed mb-4">
+            PnL formula: <Code>(exitPremium - entryPremium) × contracts × direction</Code> or
+            settlement value at expiry.
+          </p>
+          <ApiMethod
+            name="buyCall / sellCall / buyPut / sellPut"
+            description="Open an options position. Symbol is auto-constructed from parameters (e.g. ETH-260328-4000-C)."
+            params={[
+              { name: 'underlying', type: 'string', desc: 'e.g. "ETH"' },
+              { name: 'strikePrice', type: 'number', desc: 'Strike price (e.g. 4000)' },
+              { name: 'expiry', type: 'string', desc: 'Expiry date, e.g. "2026-03-28"' },
+              { name: 'contracts', type: 'number', desc: 'Number of contracts' },
+              { name: 'price', type: 'number?', desc: 'Limit price (for LIMIT orders)' },
+            ]}
+            returns="OptionsOrderResult — { orderId, symbol, avgPrice, executedQty, status }"
+            example={`// Buy 5 ETH call options
+await dt.binanceOptions.buyCall({
+  underlying: 'ETH',
+  strikePrice: 4000,
+  expiry: '2026-03-28',
+  contracts: 5
+})
+
+// Sell a put
+await dt.binanceOptions.sellPut({
+  underlying: 'BTC',
+  strikePrice: 60000,
+  expiry: '2026-06-30',
+  contracts: 2
+})`}
+          />
+          <ApiMethod
+            name="getMarkPrice"
+            description="Get mark price with full Greeks for an option symbol."
+            params={[{ name: 'symbol', type: 'string', desc: 'e.g. "ETH-260328-4000-C"' }]}
+            returns="{ markPrice, bidIV, askIV, markIV, delta, gamma, theta, vega, underlyingPrice }"
+            example={`const mark = await dt.binanceOptions.getMarkPrice('ETH-260328-4000-C')
+console.log('Delta:', mark.delta, 'IV:', mark.markIV, 'Theta:', mark.theta)`}
+          />
+          <ApiMethod
+            name="getPositions"
+            description="Get all open options positions from Binance."
+            params={[{ name: 'underlying', type: 'string?', desc: 'Filter by underlying (e.g. "ETH")' }]}
+            returns="Position[]"
+            example={`const positions = await dt.binanceOptions.getPositions('ETH')`}
+          />
+          <h3 className="text-sm font-semibold mt-6 mb-2">Automatic Expiry Settlement</h3>
+          <p className="text-xs text-text-secondary leading-relaxed">
+            The OptionsExpiryChecker service runs hourly and automatically settles expired options:
+          </p>
+          <DocTable
+            headers={['Condition', 'Action', 'PnL']}
+            rows={[
+              ['Call ITM (spot > strike)', 'Exercised', 'max(spot - strike, 0) × qty - premium_paid'],
+              ['Put ITM (strike > spot)', 'Exercised', 'max(strike - spot, 0) × qty - premium_paid'],
+              ['OTM (any type)', 'Expires worthless', '-premium_paid (total loss for long)'],
+            ]}
+          />
+        </>
+      )
+
+    // ================================================================
+    // AAVE V3 LENDING
+    // ================================================================
+    case 'aave-v3':
+      return (
+        <>
+          <DocHeader title="Aave V3 Lending" subtitle="dt.<chain>.aave" />
+          <p className="text-xs text-text-secondary leading-relaxed mb-3">
+            On-chain Aave V3 Pool operations. Available on Ethereum, Base, and Sepolia.
+            Access via the chain proxy: <Code>dt.base.aave.supply(...)</Code>.
+          </p>
+          <p className="text-xs text-text-secondary leading-relaxed mb-4">
+            PnL formula: <Code>interest earned (supply) or -interest paid (borrow)</Code>.
+            Interest accrual is tracked via Aave's liquidity index, updated every 5 minutes.
+          </p>
+          <ApiMethod
+            name="supply"
+            description="Supply tokens to Aave. Automatically approves the Pool contract if needed."
+            params={[
+              { name: 'asset', type: 'string', desc: 'Token contract address' },
+              { name: 'assetSymbol', type: 'string', desc: 'e.g. "USDC"' },
+              { name: 'amount', type: 'string', desc: 'Human-readable amount (e.g. "10000")' },
+            ]}
+            returns="string — transaction hash"
+            example={`const usdcAddress = dt.base.tokens['USDC'].address
+await dt.base.aave.supply({
+  asset: usdcAddress,
+  assetSymbol: 'USDC',
+  amount: '10000'
+})`}
+          />
+          <ApiMethod
+            name="withdraw"
+            description="Withdraw supplied tokens from Aave. Use 'max' to withdraw everything."
+            params={[
+              { name: 'asset', type: 'string', desc: 'Token contract address' },
+              { name: 'assetSymbol', type: 'string', desc: 'e.g. "USDC"' },
+              { name: 'amount', type: 'string', desc: 'Amount or "max"' },
+            ]}
+            returns="string — transaction hash"
+            example={`await dt.base.aave.withdraw({
+  asset: usdcAddress,
+  assetSymbol: 'USDC',
+  amount: 'max'  // Withdraw everything including interest
+})`}
+          />
+          <ApiMethod
+            name="borrow"
+            description="Borrow tokens from Aave against your supplied collateral."
+            params={[
+              { name: 'asset', type: 'string', desc: 'Token contract address' },
+              { name: 'assetSymbol', type: 'string', desc: 'e.g. "USDC"' },
+              { name: 'amount', type: 'string', desc: 'Amount to borrow' },
+              { name: 'interestRateMode', type: 'number?', desc: '1 = stable, 2 = variable (default)' },
+            ]}
+            returns="string — transaction hash"
+            example={`await dt.ethereum.aave.borrow({
+  asset: usdcAddress,
+  assetSymbol: 'USDC',
+  amount: '5000',
+  interestRateMode: 2  // variable rate
+})`}
+          />
+          <ApiMethod
+            name="repay"
+            description="Repay borrowed tokens. Use 'max' to repay everything."
+            params={[
+              { name: 'asset', type: 'string', desc: 'Token contract address' },
+              { name: 'assetSymbol', type: 'string', desc: 'e.g. "USDC"' },
+              { name: 'amount', type: 'string', desc: 'Amount or "max"' },
+            ]}
+            returns="string — transaction hash"
+            example={`await dt.ethereum.aave.repay({
+  asset: usdcAddress,
+  assetSymbol: 'USDC',
+  amount: 'max'
+})`}
+          />
+          <ApiMethod
+            name="getUserAccountData"
+            description="Get account health metrics from Aave."
+            params={[]}
+            returns="{ totalCollateralUsd, totalDebtUsd, availableBorrowsUsd, healthFactor, ltv, liquidationThreshold }"
+            example={`const data = await dt.base.aave.getUserAccountData()
+console.log('Collateral:', data.totalCollateralUsd)
+console.log('Debt:', data.totalDebtUsd)
+console.log('Health Factor:', data.healthFactor)
+console.log('Available to borrow:', data.availableBorrowsUsd)`}
+          />
+          <h3 className="text-sm font-semibold mt-6 mb-2">Supported Chains</h3>
+          <DocTable
+            headers={['Chain', 'Access', 'Pool Address']}
+            rows={[
+              ['Ethereum', 'dt.ethereum.aave', '0x8787...4E2'],
+              ['Base', 'dt.base.aave', '0xA238...1c5'],
+              ['Sepolia', 'dt.sepolia.aave', '0x6Ae4...951'],
+            ]}
+          />
+          <h3 className="text-sm font-semibold mt-6 mb-2">Interest Tracking</h3>
+          <p className="text-xs text-text-secondary leading-relaxed">
+            The AaveInterestTracker service reads Aave's <Code>liquidityIndex</Code> every 5 minutes
+            and updates <Code>lending_positions.current_amount</Code> and{' '}
+            <Code>accrued_interest</Code>. Interest is reflected in the PnL aggregator as unrealized
+            gains (supply) or costs (borrow).
+          </p>
+        </>
+      )
+
+    // ================================================================
+    // MULTI-INSTRUMENT PNL
+    // ================================================================
+    case 'pnl-multi-instrument':
+      return (
+        <>
+          <DocHeader title="Multi-Instrument PnL" subtitle="Aggregated PnL across all instruments" />
+          <p className="text-xs text-text-secondary leading-relaxed mb-3">
+            The PnlAggregator combines PnL from all 4 instrument engines into a unified view.
+            Each instrument has its own PnL formula:
+          </p>
+          <DocTable
+            headers={['Instrument', 'PnL Engine', 'Formula', 'Position Table']}
+            rows={[
+              ['Spot', 'PnlEngine (FIFO)', '(exit - entry) × qty - fees', 'positions'],
+              ['Perps', 'PerpPnlEngine', '(exit - entry) × size × direction + funding - fees', 'perp_positions'],
+              ['Options', 'OptionsPnlEngine', 'Premium delta or settlement value - fees', 'options_positions'],
+              ['Lending', 'LendingPnlEngine', 'Interest earned (supply) or -interest paid (borrow)', 'lending_positions'],
+            ]}
+          />
+          <h3 className="text-sm font-semibold mt-6 mb-2">Aggregated PnL API</h3>
+          <p className="text-xs text-text-secondary leading-relaxed mb-3">
+            The aggregated PnL endpoint returns a breakdown by instrument type:
+          </p>
+          <CodeBlock
+            title="GET /api/portfolio/aggregated-pnl"
+            code={`// Response structure:
+{
+  totalRealizedPnl: 1250.00,
+  totalUnrealizedPnl: 340.50,
+  totalPnl: 1590.50,
+  totalOpenPositions: 8,
+  spot: { totalRealizedPnl, totalUnrealizedPnl, totalPnl, openPositionsCount, closedPositionsCount },
+  perps: { totalRealizedPnl, totalUnrealizedPnl, totalFunding, totalPnl, openPositionsCount, closedPositionsCount },
+  options: { totalRealizedPnl, totalUnrealizedPnl, totalPnl, openPositionsCount, closedPositionsCount },
+  lending: { totalRealizedPnl, totalAccruedInterest, totalPnl, openPositionsCount, closedPositionsCount }
+}`}
+          />
+          <h3 className="text-sm font-semibold mt-6 mb-2">Instrument-Specific APIs</h3>
+          <DocTable
+            headers={['Instrument', 'Positions', 'PnL', 'Extra']}
+            rows={[
+              ['Perps', 'GET /api/perps/positions', 'GET /api/perps/pnl', 'GET /api/perps/funding/:id'],
+              ['Options', 'GET /api/options/positions', 'GET /api/options/pnl', '—'],
+              ['Lending', 'GET /api/lending/positions', 'GET /api/lending/pnl', '—'],
+              ['Spot', 'GET /api/pnl/positions', 'GET /api/pnl/total', 'GET /api/pnl/hourly'],
+            ]}
+          />
+          <h3 className="text-sm font-semibold mt-6 mb-2">Order Types by Instrument</h3>
+          <p className="text-xs text-text-secondary leading-relaxed mb-3">
+            The unified <Code>orders</Code> table uses <Code>instrument_type</Code> to differentiate:
+          </p>
+          <DocTable
+            headers={['Instrument', 'instrument_type', 'Orders Per Action', 'Extra Fields']}
+            rows={[
+              ['Spot', 'spot', '2 (linked sell + buy)', 'linked_order_id'],
+              ['Perps', 'perp', '1', 'position_side, leverage, reduce_only, margin_type'],
+              ['Options', 'option', '1', 'option_type, strike_price, expiry, underlying_symbol'],
+              ['Lending', 'lending', '1', 'lending_action, interest_rate_mode'],
+            ]}
+          />
+        </>
+      )
+
+    // ================================================================
+    // NEW EXAMPLES: PERPS, OPTIONS, LENDING
+    // ================================================================
+    case 'example-perps':
+      return (
+        <>
+          <DocHeader title="Example: Perps Strategy" />
+          <p className="text-xs text-text-secondary leading-relaxed mb-3">
+            Leveraged directional trading with automatic position and funding tracking.
+          </p>
+          <CodeBlock
+            title="Long ETH with Leverage"
+            code={`async function execute(dt) {
+  // Check current mark price and funding rate
+  const mark = await dt.binanceFutures.getMarkPrice('ETHUSDT')
+  console.log('ETH mark price:', mark.markPrice)
+  console.log('Funding rate:', mark.fundingRate)
+
+  // Open 10x leveraged long
+  const entry = await dt.binanceFutures.openLong({
+    symbol: 'ETHUSDT',
+    quantity: 1,
+    leverage: 10,
+    marginType: 'CROSS'
+  })
+  console.log('Opened long @ ', entry.avgPrice)
+
+  // Monitor position
+  const positions = await dt.binanceFutures.getPositions('ETHUSDT')
+  for (const p of positions) {
+    console.log('Unrealized PnL:', p.unRealizedProfit)
+    console.log('Liquidation price:', p.liquidationPrice)
+  }
+
+  // Close when done
+  await dt.binanceFutures.closeLong({ symbol: 'ETHUSDT', quantity: 1 })
+  console.log('Position closed')
+
+  // Check realized PnL
+  const pnl = dt.pnl.getTotal()
+  console.log('Total PnL:', pnl.totalPnl)
+  await dt.close()
+}`}
+          />
+          <CodeBlock
+            title="Short with Stop Logic"
+            code={`async function execute(dt) {
+  // Short BTC with 5x leverage
+  await dt.binanceFutures.openShort({
+    symbol: 'BTCUSDT',
+    quantity: 0.01,
+    leverage: 5
+  })
+
+  // Poll price and close at target
+  for (let i = 0; i < 60; i++) {
+    const mark = await dt.binanceFutures.getMarkPrice('BTCUSDT')
+    const positions = await dt.binanceFutures.getPositions('BTCUSDT')
+
+    if (positions.length === 0) break
+
+    const pnl = parseFloat(positions[0].unRealizedProfit)
+    console.log('Mark:', mark.markPrice, 'PnL:', pnl)
+
+    // Take profit at $50 or stop loss at -$30
+    if (pnl > 50 || pnl < -30) {
+      await dt.binanceFutures.closeShort({ symbol: 'BTCUSDT', quantity: 0.01 })
+      console.log(pnl > 0 ? 'Take profit!' : 'Stop loss!')
+      break
+    }
+
+    await new Promise(r => setTimeout(r, 5000))
+  }
+  await dt.close()
+}`}
+          />
+        </>
+      )
+
+    case 'example-options':
+      return (
+        <>
+          <DocHeader title="Example: Options Strategy" />
+          <p className="text-xs text-text-secondary leading-relaxed mb-3">
+            Options trading with Greeks monitoring and premium-based PnL.
+          </p>
+          <CodeBlock
+            title="Buy Call Spread"
+            code={`async function execute(dt) {
+  // Buy a call (long leg)
+  await dt.binanceOptions.buyCall({
+    underlying: 'ETH',
+    strikePrice: 4000,
+    expiry: '2026-03-28',
+    contracts: 5
+  })
+
+  // Sell a higher strike call (short leg)
+  await dt.binanceOptions.sellCall({
+    underlying: 'ETH',
+    strikePrice: 4500,
+    expiry: '2026-03-28',
+    contracts: 5
+  })
+
+  console.log('Call spread opened: long 4000C / short 4500C')
+
+  // Monitor Greeks
+  const longMark = await dt.binanceOptions.getMarkPrice('ETH-260328-4000-C')
+  const shortMark = await dt.binanceOptions.getMarkPrice('ETH-260328-4500-C')
+
+  console.log('Long delta:', longMark.delta, 'Short delta:', shortMark.delta)
+  console.log('Net delta:', parseFloat(longMark.delta) - parseFloat(shortMark.delta))
+  console.log('Long IV:', longMark.markIV, 'Short IV:', shortMark.markIV)
+
+  // The OptionsExpiryChecker will auto-settle at expiry
+  await dt.close()
+}`}
+          />
+        </>
+      )
+
+    case 'example-lending':
+      return (
+        <>
+          <DocHeader title="Example: Lending Strategy" />
+          <p className="text-xs text-text-secondary leading-relaxed mb-3">
+            Aave V3 supply/borrow operations with automatic interest tracking.
+          </p>
+          <CodeBlock
+            title="Supply & Earn Yield on Base"
+            code={`async function execute(dt) {
+  const usdcAddress = dt.base.tokens['USDC'].address
+
+  // Supply USDC to earn yield
+  await dt.base.aave.supply({
+    asset: usdcAddress,
+    assetSymbol: 'USDC',
+    amount: '10000'
+  })
+  console.log('Supplied 10,000 USDC to Aave on Base')
+
+  // Check account data
+  const account = await dt.base.aave.getUserAccountData()
+  console.log('Collateral:', account.totalCollateralUsd, 'USD')
+  console.log('Health Factor:', account.healthFactor)
+  console.log('Available to borrow:', account.availableBorrowsUsd, 'USD')
+
+  // Interest accrues automatically (tracked every 5min)
+  // Wait and check...
+  await new Promise(r => setTimeout(r, 60000))
+
+  // Withdraw with interest
+  await dt.base.aave.withdraw({
+    asset: usdcAddress,
+    assetSymbol: 'USDC',
+    amount: 'max'
+  })
+  console.log('Withdrawn all USDC + interest')
+
+  await dt.close()
+}`}
+          />
+          <CodeBlock
+            title="Leveraged Yield: Supply + Borrow Loop"
+            code={`async function execute(dt) {
+  const wethAddress = dt.ethereum.tokens['WETH'].address
+  const usdcAddress = dt.ethereum.tokens['USDC'].address
+
+  // Supply ETH as collateral
+  await dt.ethereum.aave.supply({
+    asset: wethAddress,
+    assetSymbol: 'WETH',
+    amount: '5.0'
+  })
+
+  // Borrow USDC against ETH collateral
+  await dt.ethereum.aave.borrow({
+    asset: usdcAddress,
+    assetSymbol: 'USDC',
+    amount: '5000',
+    interestRateMode: 2  // variable
+  })
+
+  // Monitor health factor
+  const account = await dt.ethereum.aave.getUserAccountData()
+  console.log('Health Factor:', account.healthFactor)
+
+  if (account.healthFactor < 1.5) {
+    console.log('WARNING: Health factor low, repaying...')
+    await dt.ethereum.aave.repay({
+      asset: usdcAddress,
+      assetSymbol: 'USDC',
+      amount: 'max'
+    })
+  }
+
+  await dt.close()
 }`}
           />
         </>

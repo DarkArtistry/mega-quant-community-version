@@ -98,6 +98,18 @@ export interface Order {
   deadline?: string
   created_at: string
   updated_at: string
+  // Multi-instrument fields
+  instrument_type?: InstrumentType
+  position_side?: string
+  leverage?: number
+  reduce_only?: boolean
+  margin_type?: string
+  option_type?: string
+  strike_price?: string
+  expiry?: string
+  underlying_symbol?: string
+  lending_action?: string
+  interest_rate_mode?: string
   // Enriched detail fields
   gas_cost_usd?: number
   gas_used?: number
@@ -209,4 +221,134 @@ export interface BackendStatus {
   connected: boolean
   wsConnected: boolean
   lastCheck: string
+}
+
+// ============================================================================
+// Multi-Instrument Types
+// ============================================================================
+
+export type InstrumentType = 'spot' | 'perp' | 'option' | 'lending'
+
+export interface PerpPosition {
+  id: string
+  strategy_id: string | null
+  account_id: string | null
+  protocol: string
+  chain_id: number | null
+  market_symbol: string
+  side: 'long' | 'short'
+  position_size: string
+  avg_entry_price: string
+  current_price: string | null
+  leverage: number
+  margin_type: string
+  collateral_amount: string | null
+  collateral_asset: string | null
+  liquidation_price: string | null
+  realized_pnl: string
+  unrealized_pnl: string
+  total_fees: string
+  total_funding: string
+  status: 'open' | 'closed' | 'liquidated'
+  opened_at: string
+  closed_at: string | null
+}
+
+export interface OptionPosition {
+  id: string
+  strategy_id: string | null
+  account_id: string | null
+  protocol: string
+  chain_id: number | null
+  underlying_symbol: string
+  option_type: 'call' | 'put'
+  side: 'long' | 'short'
+  strike_price: string
+  expiry: string
+  contracts: string
+  entry_premium: string
+  current_premium: string | null
+  realized_pnl: string
+  unrealized_pnl: string
+  total_fees: string
+  delta: string | null
+  gamma: string | null
+  theta: string | null
+  vega: string | null
+  implied_volatility: string | null
+  status: 'open' | 'closed' | 'expired' | 'exercised'
+  opened_at: string
+  closed_at: string | null
+}
+
+export interface LendingPosition {
+  id: string
+  strategy_id: string | null
+  account_id: string | null
+  protocol: string
+  chain_id: number | null
+  asset_symbol: string
+  asset_address: string | null
+  atoken_address: string | null
+  position_type: 'supply' | 'borrow'
+  interest_rate_mode: string | null
+  principal_amount: string
+  current_amount: string
+  accrued_interest: string
+  current_apy: string | null
+  health_factor: string | null
+  liquidation_threshold: string | null
+  realized_pnl: string
+  total_fees: string
+  status: 'open' | 'closed' | 'liquidated'
+  opened_at: string
+  closed_at: string | null
+}
+
+export interface FundingPayment {
+  id: string
+  perp_position_id: string
+  strategy_id: string | null
+  account_id: string | null
+  market_symbol: string
+  payment_amount: string
+  funding_rate: string
+  position_size: string | null
+  timestamp: string
+}
+
+export interface AggregatedPnl {
+  totalRealizedPnl: number
+  totalUnrealizedPnl: number
+  totalPnl: number
+  totalOpenPositions: number
+  spot: {
+    totalRealizedPnl: number
+    totalUnrealizedPnl: number
+    totalPnl: number
+    openPositionsCount: number
+    closedPositionsCount: number
+  }
+  perps: {
+    totalRealizedPnl: number
+    totalUnrealizedPnl: number
+    totalFunding: number
+    totalPnl: number
+    openPositionsCount: number
+    closedPositionsCount: number
+  }
+  options: {
+    totalRealizedPnl: number
+    totalUnrealizedPnl: number
+    totalPnl: number
+    openPositionsCount: number
+    closedPositionsCount: number
+  }
+  lending: {
+    totalRealizedPnl: number
+    totalAccruedInterest: number
+    totalPnl: number
+    openPositionsCount: number
+    closedPositionsCount: number
+  }
 }

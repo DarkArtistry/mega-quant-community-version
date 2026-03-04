@@ -7,6 +7,7 @@ import { TOKEN_ADDRESSES, type TokenInfo } from './config/tokens.js'
 import { ChainlinkOracle } from './oracles/ChainlinkOracle.js'
 import type { ProtocolProxy, SwapResult, QuoteResult } from './ProtocolProxy.js'
 import type { DeltaTrade } from './DeltaTrade.js'
+import type { AaveV3Protocol } from './protocols/AaveV3Protocol.js'
 
 export class ChainProxy {
   public readonly chainName: string
@@ -24,6 +25,7 @@ export class ChainProxy {
   private _uniswapV4?: ProtocolProxy
   private _oneInch?: ProtocolProxy
   private _chainlinkOracle?: ChainlinkOracle
+  private _aave?: AaveV3Protocol
   private _chainConfig: ChainConfig
 
   constructor(chainName: string, privateKey: string, deltaTrade: DeltaTrade, accountId?: string) {
@@ -84,6 +86,10 @@ export class ChainProxy {
     return this._chainlinkOracle
   }
 
+  get aave(): AaveV3Protocol | undefined {
+    return this._aave
+  }
+
   /**
    * Initialize protocol proxies.
    * Called separately to allow async dynamic imports.
@@ -142,6 +148,23 @@ export class ChainProxy {
       } catch (error: any) {
         console.warn(`[ChainProxy] Could not initialize 1inch: ${error.message}`)
       }
+    }
+
+    // Initialize Aave V3 on supported chains
+    try {
+      const { AaveV3Protocol: AaveV3, AAVE_V3_ADDRESSES } = await import('./protocols/AaveV3Protocol.js')
+      if (AAVE_V3_ADDRESSES[this.chainName]) {
+        this._aave = new AaveV3(
+          this.chainName,
+          this.chainId,
+          this.wallet,
+          this.deltaTrade.strategyId,
+          this.accountId
+        )
+        console.log('[ChainProxy] Aave V3 protocol initialized')
+      }
+    } catch (error: any) {
+      console.warn(`[ChainProxy] Could not initialize Aave V3: ${error.message}`)
     }
 
     // Initialize Chainlink oracle on Ethereum mainnet only

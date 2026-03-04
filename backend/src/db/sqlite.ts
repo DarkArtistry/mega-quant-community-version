@@ -830,6 +830,225 @@ function runMigrations() {
   } catch (e: any) {
     console.error('Error creating strategy_logs table:', e.message)
   }
+
+  // =========================================================================
+  // Multi-instrument migrations (perps, options, lending)
+  // =========================================================================
+
+  // Add instrument_type + instrument-specific columns to orders table
+  const orderInstrumentColumns = [
+    'instrument_type TEXT NOT NULL DEFAULT \'spot\'',
+    'position_side TEXT',
+    'leverage REAL',
+    'reduce_only INTEGER',
+    'margin_type TEXT',
+    'option_type TEXT',
+    'strike_price TEXT',
+    'expiry TEXT',
+    'underlying_symbol TEXT',
+    'lending_action TEXT',
+    'interest_rate_mode TEXT'
+  ]
+
+  for (const colDef of orderInstrumentColumns) {
+    const colName = colDef.split(' ')[0]
+    try {
+      db.exec(`ALTER TABLE orders ADD COLUMN ${colDef}`)
+      console.log(`Added column orders.${colName}`)
+    } catch (e: any) {
+      if (!e.message.includes('duplicate column name')) {
+        console.error(`Error adding column orders.${colName}:`, e.message)
+      }
+    }
+  }
+
+  // Enhanced perp_positions table (DROP old + recreate with full schema)
+  try {
+    const perpHasNewSchema = db.prepare(`
+      SELECT sql FROM sqlite_master WHERE type='table' AND name='perp_positions'
+    `).get() as any
+    const needsRecreate = perpHasNewSchema && !perpHasNewSchema.sql.includes('avg_entry_price')
+
+    if (needsRecreate) {
+      db.exec(`DROP TABLE IF EXISTS funding_payments`)
+      db.exec(`DROP TABLE IF EXISTS perp_positions`)
+      console.log('Dropped old perp_positions and funding_payments for schema upgrade')
+    }
+  } catch (e: any) {
+    console.error('Error checking perp_positions schema:', e.message)
+  }
+
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS perp_positions (
+        id TEXT PRIMARY KEY,
+        strategy_id TEXT,
+        account_id TEXT,
+        protocol TEXT NOT NULL,
+        chain_id INTEGER,
+        market_symbol TEXT NOT NULL,
+        side TEXT NOT NULL,
+        position_size TEXT NOT NULL DEFAULT '0',
+        avg_entry_price TEXT NOT NULL DEFAULT '0',
+        current_price TEXT,
+        leverage REAL NOT NULL DEFAULT 1,
+        margin_type TEXT DEFAULT 'CROSS',
+        collateral_amount TEXT,
+        collateral_asset TEXT,
+        liquidation_price TEXT,
+        realized_pnl TEXT NOT NULL DEFAULT '0',
+        unrealized_pnl TEXT DEFAULT '0',
+        total_fees TEXT NOT NULL DEFAULT '0',
+        total_funding TEXT NOT NULL DEFAULT '0',
+        status TEXT NOT NULL DEFAULT 'open',
+        opened_at TEXT DEFAULT (datetime('now')),
+        closed_at TEXT,
+        FOREIGN KEY (strategy_id) REFERENCES strategies(id) ON DELETE SET NULL
+      )
+    `)
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_perp_positions_strategy ON perp_positions(strategy_id)`)
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_perp_positions_account ON perp_positions(account_id)`)
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_perp_positions_status ON perp_positions(status)`)
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_perp_positions_symbol ON perp_positions(market_symbol)`)
+    console.log('Created/verified perp_positions table (enhanced schema)')
+  } catch (e: any) {
+    console.error('Error creating perp_positions:', e.message)
+  }
+
+  // Enhanced options_positions table (DROP old + recreate)
+  try {
+    const optHasNewSchema = db.prepare(`
+      SELECT sql FROM sqlite_master WHERE type='table' AND name='options_positions'
+    `).get() as any
+    const needsRecreate = optHasNewSchema && !optHasNewSchema.sql.includes('entry_premium')
+
+    if (needsRecreate) {
+      db.exec(`DROP TABLE IF EXISTS options_positions`)
+      console.log('Dropped old options_positions for schema upgrade')
+    }
+  } catch (e: any) {
+    console.error('Error checking options_positions schema:', e.message)
+  }
+
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS options_positions (
+        id TEXT PRIMARY KEY,
+        strategy_id TEXT,
+        account_id TEXT,
+        protocol TEXT NOT NULL,
+        chain_id INTEGER,
+        underlying_symbol TEXT NOT NULL,
+        option_type TEXT NOT NULL,
+        side TEXT NOT NULL,
+        strike_price TEXT NOT NULL,
+        expiry TEXT NOT NULL,
+        contracts TEXT NOT NULL DEFAULT '0',
+        entry_premium TEXT NOT NULL DEFAULT '0',
+        current_premium TEXT,
+        realized_pnl TEXT NOT NULL DEFAULT '0',
+        unrealized_pnl TEXT DEFAULT '0',
+        total_fees TEXT NOT NULL DEFAULT '0',
+        delta TEXT,
+        gamma TEXT,
+        theta TEXT,
+        vega TEXT,
+        implied_volatility TEXT,
+        status TEXT NOT NULL DEFAULT 'open',
+        opened_at TEXT DEFAULT (datetime('now')),
+        closed_at TEXT,
+        FOREIGN KEY (strategy_id) REFERENCES strategies(id) ON DELETE SET NULL
+      )
+    `)
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_options_positions_strategy ON options_positions(strategy_id)`)
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_options_positions_account ON options_positions(account_id)`)
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_options_positions_status ON options_positions(status)`)
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_options_positions_expiry ON options_positions(expiry)`)
+    console.log('Created/verified options_positions table (enhanced schema)')
+  } catch (e: any) {
+    console.error('Error creating options_positions:', e.message)
+  }
+
+  // New lending_positions table
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS lending_positions (
+        id TEXT PRIMARY KEY,
+        strategy_id TEXT,
+        account_id TEXT,
+        protocol TEXT NOT NULL,
+        chain_id INTEGER,
+        asset_symbol TEXT NOT NULL,
+        asset_address TEXT,
+        atoken_address TEXT,
+        position_type TEXT NOT NULL,
+        interest_rate_mode TEXT,
+        principal_amount TEXT NOT NULL DEFAULT '0',
+        current_amount TEXT NOT NULL DEFAULT '0',
+        accrued_interest TEXT NOT NULL DEFAULT '0',
+        current_apy TEXT,
+        health_factor TEXT,
+        liquidation_threshold TEXT,
+        initial_liquidity_index TEXT,
+        current_liquidity_index TEXT,
+        realized_pnl TEXT NOT NULL DEFAULT '0',
+        total_fees TEXT NOT NULL DEFAULT '0',
+        status TEXT NOT NULL DEFAULT 'open',
+        opened_at TEXT DEFAULT (datetime('now')),
+        closed_at TEXT,
+        FOREIGN KEY (strategy_id) REFERENCES strategies(id) ON DELETE SET NULL
+      )
+    `)
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_lending_positions_strategy ON lending_positions(strategy_id)`)
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_lending_positions_account ON lending_positions(account_id)`)
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_lending_positions_status ON lending_positions(status)`)
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_lending_positions_asset ON lending_positions(asset_symbol)`)
+    console.log('Created/verified lending_positions table')
+  } catch (e: any) {
+    console.error('Error creating lending_positions:', e.message)
+  }
+
+  // Enhanced funding_payments table (DROP old + recreate)
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS funding_payments (
+        id TEXT PRIMARY KEY,
+        perp_position_id TEXT NOT NULL,
+        strategy_id TEXT,
+        account_id TEXT,
+        market_symbol TEXT NOT NULL,
+        payment_amount TEXT NOT NULL,
+        funding_rate TEXT NOT NULL,
+        position_size TEXT,
+        timestamp TEXT DEFAULT (datetime('now')),
+        FOREIGN KEY (perp_position_id) REFERENCES perp_positions(id) ON DELETE CASCADE
+      )
+    `)
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_funding_payments_position ON funding_payments(perp_position_id)`)
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_funding_payments_strategy ON funding_payments(strategy_id)`)
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_funding_payments_timestamp ON funding_payments(timestamp)`)
+    console.log('Created/verified funding_payments table (enhanced schema)')
+  } catch (e: any) {
+    console.error('Error creating funding_payments:', e.message)
+  }
+
+  // Extend portfolio_snapshots with lending_value_usd and account_id
+  const portfolioSnapshotColumns = [
+    'lending_value_usd REAL DEFAULT 0',
+    'account_id TEXT'
+  ]
+
+  for (const colDef of portfolioSnapshotColumns) {
+    const colName = colDef.split(' ')[0]
+    try {
+      db.exec(`ALTER TABLE portfolio_snapshots ADD COLUMN ${colDef}`)
+      console.log(`Added column portfolio_snapshots.${colName}`)
+    } catch (e: any) {
+      if (!e.message.includes('duplicate column name')) {
+        console.error(`Error adding column portfolio_snapshots.${colName}:`, e.message)
+      }
+    }
+  }
 }
 
 // Get database instance

@@ -22,9 +22,15 @@ import strategyRunnerRouter from './routes/strategy-runner.js'
 import accountActivityRouter from './routes/account-activity.js'
 import healthCheckRouter from './routes/health-check.js'
 import walletsRouter from './routes/wallets.js'
+import perpsRouter from './routes/perps.js'
+import optionsRouter from './routes/options.js'
+import lendingRouter from './routes/lending.js'
 import { strategyRunnerManager } from './lib/strategy/StrategyRunner.js'
 import { pnlSnapshotter } from './lib/trading/pnl/PnlSnapshotter.js'
 import { orderReconciler } from './services/order-reconciler.js'
+import { fundingTracker } from './lib/trading/services/FundingTracker.js'
+import { optionsExpiryChecker } from './lib/trading/services/OptionsExpiryChecker.js'
+import { aaveInterestTracker } from './lib/trading/services/AaveInterestTracker.js'
 
 dotenv.config()
 
@@ -73,6 +79,9 @@ app.use('/api/strategy-runner', strategyRunnerRouter)
 app.use('/api/account-activity', accountActivityRouter)
 app.use('/api/health', healthCheckRouter)
 app.use('/api/wallets', walletsRouter)
+app.use('/api/perps', perpsRouter)
+app.use('/api/options', optionsRouter)
+app.use('/api/lending', lendingRouter)
 
 // Error handling middleware
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -127,6 +136,16 @@ async function startServer() {
       // Start order reconciler (checks pending orders every 30s)
       orderReconciler.start()
       console.log(`[OrderReconciler] Started with 30-second interval`)
+
+      // Start multi-instrument background services
+      fundingTracker.start()
+      console.log(`[FundingTracker] Started with 1-hour interval`)
+
+      optionsExpiryChecker.start()
+      console.log(`[OptionsExpiryChecker] Started with 1-hour interval`)
+
+      aaveInterestTracker.start()
+      console.log(`[AaveInterestTracker] Started with 5-minute interval`)
     })
   } catch (error) {
     console.error('Failed to start server:', error)
@@ -140,6 +159,9 @@ process.on('SIGINT', async () => {
   await strategyRunnerManager.stopAll()
   pnlSnapshotter.stop()
   orderReconciler.stop()
+  fundingTracker.stop()
+  optionsExpiryChecker.stop()
+  aaveInterestTracker.stop()
   liveDataService.shutdown()
   closeDatabase()
   process.exit(0)
@@ -150,6 +172,9 @@ process.on('SIGTERM', async () => {
   await strategyRunnerManager.stopAll()
   pnlSnapshotter.stop()
   orderReconciler.stop()
+  fundingTracker.stop()
+  optionsExpiryChecker.stop()
+  aaveInterestTracker.stop()
   liveDataService.shutdown()
   closeDatabase()
   process.exit(0)

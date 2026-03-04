@@ -50,6 +50,40 @@ export interface OrderUpdateData {
   [key: string]: any
 }
 
+export interface PerpPositionUpdateData {
+  positionId: string
+  marketSymbol: string
+  side: string
+  action: string
+  size: string
+  price: string
+  realizedPnl?: number
+  timestamp: string
+  [key: string]: any
+}
+
+export interface OptionPositionUpdateData {
+  positionId: string
+  underlyingSymbol: string
+  optionType: string
+  action: string
+  premium: string
+  contracts: string
+  realizedPnl?: number
+  timestamp: string
+  [key: string]: any
+}
+
+export interface LendingPositionUpdateData {
+  positionId: string
+  assetSymbol: string
+  action: string
+  amount: string
+  accruedInterest?: string
+  timestamp: string
+  [key: string]: any
+}
+
 interface TrackedClient {
   ws: WebSocket
   id: string
@@ -57,7 +91,7 @@ interface TrackedClient {
   connectedAt: number
 }
 
-type MessageType = 'trade_execution' | 'price_update' | 'strategy_update' | 'order_update' | 'ping' | 'pong' | 'error'
+type MessageType = 'trade_execution' | 'price_update' | 'strategy_update' | 'order_update' | 'perp_position_update' | 'option_position_update' | 'lending_position_update' | 'ping' | 'pong' | 'error'
 
 interface WSMessage {
   type: MessageType
@@ -208,6 +242,39 @@ class LiveDataService {
     this.broadcast({
       type: 'order_update',
       data: orderData,
+      timestamp: Date.now()
+    })
+  }
+
+  /**
+   * Broadcast a perp position update to all connected clients.
+   */
+  broadcastPerpPositionUpdate(data: PerpPositionUpdateData): void {
+    this.broadcast({
+      type: 'perp_position_update',
+      data,
+      timestamp: Date.now()
+    })
+  }
+
+  /**
+   * Broadcast an option position update to all connected clients.
+   */
+  broadcastOptionPositionUpdate(data: OptionPositionUpdateData): void {
+    this.broadcast({
+      type: 'option_position_update',
+      data,
+      timestamp: Date.now()
+    })
+  }
+
+  /**
+   * Broadcast a lending position update to all connected clients.
+   */
+  broadcastLendingPositionUpdate(data: LendingPositionUpdateData): void {
+    this.broadcast({
+      type: 'lending_position_update',
+      data,
       timestamp: Date.now()
     })
   }

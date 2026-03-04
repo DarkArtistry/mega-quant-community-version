@@ -103,6 +103,10 @@ export interface ChainConfig {
     swapRouter?: string // Optional: Custom SwapRouter contract
   }
   oneInchSupported: boolean
+  aaveV3?: {
+    pool: string
+    dataProvider: string
+  }
 }
 
 /**
@@ -150,7 +154,11 @@ const CHAIN_CONFIGS_TEMPLATE: Record<string, ChainConfig> = {
       quoter: '0x52F0E24D1c21C8A0cB1e5a5dD6198556BD9E1203',
       stateView: '0x7ffe42c4a5deea5b0fec41c94c136cf115597227'
     },
-    oneInchSupported: true
+    oneInchSupported: true,
+    aaveV3: {
+      pool: '0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2',
+      dataProvider: '0x7B4EB56E7CD4b454BA8ff71E4518426c9EB28E3d'
+    }
   },
 
   base: {
@@ -177,7 +185,11 @@ const CHAIN_CONFIGS_TEMPLATE: Record<string, ChainConfig> = {
       quoter: '0x0d5e0f971ed27fbff6c2837bf31316121532048d',
       stateView: '0xa3c0c9b65bad0b08107aa264b0f3db444b867a71'
     },
-    oneInchSupported: true
+    oneInchSupported: true,
+    aaveV3: {
+      pool: '0xA238Dd80C259a72e81d7e4664a9801593F98d1c5',
+      dataProvider: '0x2d8A3C5677189723C4cB8873CfC9C8976FDF38Ac'
+    }
   },
 
   unichain: {

@@ -8,6 +8,7 @@
 import { getDatabase } from '../../../db/index.js'
 import { v4 as uuidv4 } from 'uuid'
 import { pnlEngine } from './PnlEngine.js'
+import { pnlAggregator } from './PnlAggregator.js'
 import { priceService } from '../services/PriceService.js'
 
 export class PnlSnapshotter {

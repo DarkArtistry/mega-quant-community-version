@@ -1,7 +1,19 @@
 import express from 'express'
 import { getDatabase } from '../db/index.js'
+import { pnlAggregator } from '../lib/trading/pnl/PnlAggregator.js'
 
 const router = express.Router()
+
+// GET /api/portfolio/aggregated-pnl - Combined PnL across all instrument types
+router.get('/aggregated-pnl', (req, res) => {
+  try {
+    const { strategy_id } = req.query
+    const pnl = pnlAggregator.getTotalPnl(strategy_id as string | undefined)
+    res.json({ success: true, pnl })
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message })
+  }
+})
 
 // GET /api/portfolio/overview - Get portfolio overview metrics
 router.get('/overview', async (req, res) => {

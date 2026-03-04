@@ -6,6 +6,8 @@ import { ChainProxy } from './ChainProxy.js'
 import { TOKEN_ADDRESSES } from './config/tokens.js'
 import { getChainConfig } from './config/chains.js'
 import { BinanceProxy } from './cex/BinanceProxy.js'
+import { BinanceFuturesProxy } from './cex/BinanceFuturesProxy.js'
+import { BinanceOptionsProxy } from './cex/BinanceOptionsProxy.js'
 import { orderManager, type Order } from './orders/OrderManager.js'
 import { pnlEngine, type PnlSummary, type Position } from './pnl/PnlEngine.js'
 import type { StrategyAccountsResult } from '../../services/strategy-accounts.js'
@@ -51,6 +53,8 @@ export class DeltaTrade {
 
   // CEX proxies
   public readonly binance?: BinanceProxy
+  public readonly binanceFutures?: BinanceFuturesProxy
+  public readonly binanceOptions?: BinanceOptionsProxy
 
   // Strategy-scoped accessors
   public readonly orders: {
@@ -112,6 +116,22 @@ export class DeltaTrade {
         testnet: isTestnet
       }, binanceAccountId)
       console.log(`[DeltaTrade] Initialized Binance proxy (testnet: ${isTestnet}, account: ${binanceAccountId || 'none'})`)
+
+      // Also initialize Binance Futures proxy (same API key)
+      this.binanceFutures = new BinanceFuturesProxy(strategyId, {
+        apiKey: cexCredentials.binance.apiKey,
+        apiSecret: cexCredentials.binance.apiSecret,
+        testnet: isTestnet
+      }, binanceAccountId)
+      console.log(`[DeltaTrade] Initialized Binance Futures proxy`)
+
+      // Also initialize Binance Options proxy (same API key)
+      this.binanceOptions = new BinanceOptionsProxy(strategyId, {
+        apiKey: cexCredentials.binance.apiKey,
+        apiSecret: cexCredentials.binance.apiSecret,
+        testnet: isTestnet
+      }, binanceAccountId)
+      console.log(`[DeltaTrade] Initialized Binance Options proxy`)
     }
 
     // Bind strategy-scoped order accessors

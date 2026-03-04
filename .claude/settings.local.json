@@ -49,7 +49,29 @@
       "Bash(echo === Checking Unichain via Blockscout ===:*)",
       "Bash(echo === UNI on Base ===:*)",
       "Bash(echo:*)",
-      "WebFetch(domain:data.chain.link)"
+      "WebFetch(domain:data.chain.link)",
+      "WebFetch(domain:hyperliquid.gitbook.io)",
+      "WebFetch(domain:gmx-docs.io)",
+      "WebFetch(domain:docs.gmx.io)",
+      "WebFetch(domain:www.binance.com)",
+      "WebFetch(domain:docs.deribit.com)",
+      "WebFetch(domain:blockchain.oodles.io)",
+      "WebFetch(domain:medium.com)",
+      "WebFetch(domain:aave.com)",
+      "WebFetch(domain:docs.aave.com)",
+      "WebFetch(domain:apidog.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:algotrading101.com)",
+      "WebFetch(domain:docs.dydx.exchange)",
+      "WebFetch(domain:www.bybit.com)",
+      "WebFetch(domain:docs.dydx.xyz)",
+      "WebFetch(domain:web3-ethereum-defi.readthedocs.io)",
+      "WebFetch(domain:web3-ethereum-defi.tradingstrategy.ai)",
+      "WebFetch(domain:yellow.com)",
+      "WebFetch(domain:mixbytes.io)",
+      "WebFetch(domain:binance-docs.github.io)",
+      "WebFetch(domain:insights.deribit.com)",
+      "WebFetch(domain:support.deribit.com)"
     ]
   }
 }
