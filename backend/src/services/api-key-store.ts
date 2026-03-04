@@ -13,6 +13,7 @@ export interface ApiKeys {
   oneInchApiKey?: string
   binanceApiKey?: string
   binanceApiSecret?: string
+  binanceTestnet?: boolean
 }
 
 class ApiKeyStore {
@@ -75,6 +76,13 @@ class ApiKeyStore {
    */
   getBinanceApiSecret(): string | undefined {
     return this.keys.binanceApiSecret
+  }
+
+  /**
+   * Check if Binance is configured for testnet
+   */
+  isBinanceTestnet(): boolean {
+    return this.keys.binanceTestnet ?? false
   }
 
   /**

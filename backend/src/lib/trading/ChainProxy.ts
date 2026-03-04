@@ -1,9 +1,10 @@
 // ChainProxy - Provides access to protocols on a specific chain
 // Ported from reference, adapted for ethers v6 and new system architecture
 
-import { JsonRpcProvider, Wallet, Contract, formatUnits } from 'ethers'
+import { JsonRpcProvider, Wallet, Contract, formatUnits, FetchRequest, Network } from 'ethers'
 import { getChainConfig, type ChainConfig } from './config/chains.js'
 import { TOKEN_ADDRESSES, type TokenInfo } from './config/tokens.js'
+import { ChainlinkOracle } from './oracles/ChainlinkOracle.js'
 import type { ProtocolProxy, SwapResult, QuoteResult } from './ProtocolProxy.js'
 import type { DeltaTrade } from './DeltaTrade.js'
 
@@ -13,6 +14,7 @@ export class ChainProxy {
   public readonly provider: JsonRpcProvider
   public readonly wallet: Wallet
   public readonly deltaTrade: DeltaTrade
+  public readonly accountId?: string
 
   // Token addresses for easy access
   public readonly tokens: Record<string, TokenInfo>
@@ -21,9 +23,10 @@ export class ChainProxy {
   private _uniswapV3?: ProtocolProxy
   private _uniswapV4?: ProtocolProxy
   private _oneInch?: ProtocolProxy
+  private _chainlinkOracle?: ChainlinkOracle
   private _chainConfig: ChainConfig
 
-  constructor(chainName: string, privateKey: string, deltaTrade: DeltaTrade) {
+  constructor(chainName: string, privateKey: string, deltaTrade: DeltaTrade, accountId?: string) {
     this.chainName = chainName
     this.deltaTrade = deltaTrade
 
@@ -34,9 +37,18 @@ export class ChainProxy {
     // Load token addresses for this chain
     this.tokens = TOKEN_ADDRESSES[chainName] || {}
 
-    // Set up provider and wallet (ethers v6 pattern)
-    this.provider = new JsonRpcProvider(this._chainConfig.rpcUrl)
+    // Skip obviously bad URLs (placeholder keys)
+    if (this._chainConfig.rpcUrl.includes('YOUR_KEY')) {
+      throw new Error(`RPC URL for ${chainName} contains placeholder API key — skipping`)
+    }
+
+    // Set up provider with explicit network to skip eth_chainId detection (prevents infinite retry)
+    const fetchReq = new FetchRequest(this._chainConfig.rpcUrl)
+    fetchReq.timeout = 10_000
+    const network = Network.from(this._chainConfig.chainId)
+    this.provider = new JsonRpcProvider(fetchReq, network, { staticNetwork: network })
     this.wallet = new Wallet(privateKey, this.provider)
+    this.accountId = accountId
 
     console.log(`[ChainProxy] Initialized ${chainName} (Chain ID: ${this.chainId})`)
     console.log(`[ChainProxy] Wallet address: ${this.wallet.address}`)
@@ -68,6 +80,10 @@ export class ChainProxy {
     return this._oneInch
   }
 
+  get chainlink(): ChainlinkOracle | undefined {
+    return this._chainlinkOracle
+  }
+
   /**
    * Initialize protocol proxies.
    * Called separately to allow async dynamic imports.
@@ -85,7 +101,8 @@ export class ChainProxy {
           this.chainId,
           this.wallet,
           this.deltaTrade.executionId,
-          this.deltaTrade.strategyId
+          this.deltaTrade.strategyId,
+          this.accountId
         )
         console.log('[ChainProxy] Uniswap V3 protocol initialized')
       } catch (error: any) {
@@ -101,7 +118,8 @@ export class ChainProxy {
           this.chainId,
           this.wallet,
           this.deltaTrade.executionId,
-          this.deltaTrade.strategyId
+          this.deltaTrade.strategyId,
+          this.accountId
         )
         console.log('[ChainProxy] Uniswap V4 protocol initialized')
       } catch (error: any) {
@@ -117,11 +135,22 @@ export class ChainProxy {
           this.chainId,
           this.wallet,
           this.deltaTrade.executionId,
-          this.deltaTrade.strategyId
+          this.deltaTrade.strategyId,
+          this.accountId
         )
         console.log('[ChainProxy] 1inch protocol initialized')
       } catch (error: any) {
         console.warn(`[ChainProxy] Could not initialize 1inch: ${error.message}`)
+      }
+    }
+
+    // Initialize Chainlink oracle on Ethereum mainnet only
+    if (this.chainName === 'ethereum') {
+      try {
+        this._chainlinkOracle = new ChainlinkOracle(this.provider)
+        console.log('[ChainProxy] Chainlink oracle initialized')
+      } catch (error: any) {
+        console.warn(`[ChainProxy] Could not initialize Chainlink oracle: ${error.message}`)
       }
     }
   }
@@ -162,6 +191,14 @@ export class ChainProxy {
       return `${this._chainConfig.blockExplorer}/tx/${txHash}`
     }
     return this._chainConfig.blockExplorer
+  }
+
+  /**
+   * Shorthand: get a clickable block explorer link for a transaction hash.
+   * Usage: console.log(dt.sepolia.txLink(hash))
+   */
+  txLink(txHash: string): string {
+    return `${this._chainConfig.blockExplorer}/tx/${txHash}`
   }
 
   /**
@@ -223,6 +260,55 @@ export class ChainProxy {
    */
   getAvailableTokens(): string[] {
     return Object.keys(this.tokens)
+  }
+
+  // ============================================================
+  // ETH Wrapping
+  // ============================================================
+
+  /**
+   * Wrap native ETH into WETH (ERC20).
+   * Required before swapping on Uniswap V3 which only handles ERC20 tokens.
+   * @param amount Amount of ETH to wrap (e.g., '0.001')
+   */
+  async wrapETH(amount: string): Promise<string> {
+    const wethInfo = this.tokens['WETH']
+    if (!wethInfo) {
+      throw new Error(`WETH not configured for ${this.chainName}`)
+    }
+
+    const WETH_ABI = ['function deposit() payable', 'function withdraw(uint256 wad)']
+    const wethContract = new Contract(wethInfo.address, WETH_ABI, this.wallet)
+
+    const value = BigInt(Math.floor(parseFloat(amount) * 1e18))
+    console.log(`[ChainProxy] Wrapping ${amount} ETH -> WETH on ${this.chainName}...`)
+
+    const tx = await wethContract.deposit({ value })
+    const receipt = await tx.wait()
+    console.log(`[ChainProxy] Wrapped ${amount} ETH -> WETH (tx: ${receipt.hash})`)
+    return receipt.hash
+  }
+
+  /**
+   * Unwrap WETH back to native ETH.
+   * @param amount Amount of WETH to unwrap (e.g., '0.001')
+   */
+  async unwrapETH(amount: string): Promise<string> {
+    const wethInfo = this.tokens['WETH']
+    if (!wethInfo) {
+      throw new Error(`WETH not configured for ${this.chainName}`)
+    }
+
+    const WETH_ABI = ['function deposit() payable', 'function withdraw(uint256 wad)']
+    const wethContract = new Contract(wethInfo.address, WETH_ABI, this.wallet)
+
+    const wad = BigInt(Math.floor(parseFloat(amount) * 1e18))
+    console.log(`[ChainProxy] Unwrapping ${amount} WETH -> ETH on ${this.chainName}...`)
+
+    const tx = await wethContract.withdraw(wad)
+    const receipt = await tx.wait()
+    console.log(`[ChainProxy] Unwrapped ${amount} WETH -> ETH (tx: ${receipt.hash})`)
+    return receipt.hash
   }
 
   // ============================================================

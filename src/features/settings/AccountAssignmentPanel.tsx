@@ -12,8 +12,10 @@ import { Loader2, X } from 'lucide-react'
 const NETWORKS = [
   { id: 1, chainId: 1, name: 'Ethereum' },
   { id: 8453, chainId: 8453, name: 'Base' },
+  { id: 130, chainId: 130, name: 'Unichain' },
   { id: 11155111, chainId: 11155111, name: 'Sepolia' },
   { id: 84532, chainId: 84532, name: 'Base Sepolia' },
+  { id: 1301, chainId: 1301, name: 'Unichain Sepolia' },
 ]
 
 const CEX_EXCHANGES = [

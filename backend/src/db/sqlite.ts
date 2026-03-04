@@ -675,6 +675,16 @@ function runMigrations() {
     }
   }
 
+  // Add binance_testnet flag to api_configs if missing
+  try {
+    db.exec(`ALTER TABLE api_configs ADD COLUMN binance_testnet INTEGER DEFAULT 0`)
+    console.log('Added column api_configs.binance_testnet')
+  } catch (e: any) {
+    if (!e.message.includes('duplicate column name')) {
+      console.error('Error adding column api_configs.binance_testnet:', e.message)
+    }
+  }
+
   // Add account_id column to trades table
   try {
     db.exec(`ALTER TABLE trades ADD COLUMN account_id TEXT`)
@@ -731,6 +741,52 @@ function runMigrations() {
   } catch (e: any) {
     if (!e.message.includes('duplicate column name')) {
       console.error('Error adding column strategy_account_mappings.exchange_name:', e.message)
+    }
+  }
+
+  // Add new detail columns to orders table
+  const orderDetailColumns = [
+    'gas_cost_usd REAL',
+    'gas_used INTEGER',
+    'commission TEXT',
+    'commission_asset TEXT',
+    'token_in_symbol TEXT',
+    'token_in_amount TEXT',
+    'token_out_symbol TEXT',
+    'token_out_amount TEXT',
+    'slippage_percentage REAL',
+    'filled_at TEXT',
+    'block_number INTEGER',
+    'linked_order_id TEXT'
+  ]
+
+  for (const colDef of orderDetailColumns) {
+    const colName = colDef.split(' ')[0]
+    try {
+      db.exec(`ALTER TABLE orders ADD COLUMN ${colDef}`)
+      console.log(`Added column orders.${colName}`)
+    } catch (e: any) {
+      if (!e.message.includes('duplicate column name')) {
+        console.error(`Error adding column orders.${colName}:`, e.message)
+      }
+    }
+  }
+
+  // Add quote_asset_symbol and protocol columns to positions table
+  const positionDetailColumns = [
+    'quote_asset_symbol TEXT',
+    'protocol TEXT'
+  ]
+
+  for (const colDef of positionDetailColumns) {
+    const colName = colDef.split(' ')[0]
+    try {
+      db.exec(`ALTER TABLE positions ADD COLUMN ${colDef}`)
+      console.log(`Added column positions.${colName}`)
+    } catch (e: any) {
+      if (!e.message.includes('duplicate column name')) {
+        console.error(`Error adding column positions.${colName}:`, e.message)
+      }
     }
   }
 

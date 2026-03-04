@@ -22,6 +22,18 @@ export interface OrderData {
   deadline?: string
   hookOrderId?: string
   accountId?: string
+  linkedOrderId?: string  // Links the other side of a swap (sell ↔ buy)
+  // Enriched detail fields
+  gasCostUsd?: number
+  gasUsed?: number
+  commission?: string
+  commissionAsset?: string
+  tokenInSymbol?: string
+  tokenInAmount?: string
+  tokenOutSymbol?: string
+  tokenOutAmount?: string
+  slippagePercentage?: number
+  blockNumber?: number
 }
 
 export interface OrderFillData {
@@ -51,6 +63,19 @@ export interface Order {
   createdAt: string
   updatedAt: string
   accountId: string | null
+  // Enriched detail fields
+  gasCostUsd: number | null
+  gasUsed: number | null
+  commission: string | null
+  commissionAsset: string | null
+  tokenInSymbol: string | null
+  tokenInAmount: string | null
+  tokenOutSymbol: string | null
+  tokenOutAmount: string | null
+  slippagePercentage: number | null
+  filledAt: string | null
+  blockNumber: number | null
+  linkedOrderId: string | null
 }
 
 export class OrderManager {
@@ -65,8 +90,11 @@ export class OrderManager {
       INSERT INTO orders (
         id, strategy_id, order_type, side, asset_symbol, asset_address,
         chain_id, protocol, quantity, price, tick, status,
-        hook_order_id, deadline, account_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+        hook_order_id, deadline, account_id, linked_order_id,
+        gas_cost_usd, gas_used, commission, commission_asset,
+        token_in_symbol, token_in_amount, token_out_symbol, token_out_amount,
+        slippage_percentage, block_number
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       data.strategyId,
@@ -81,7 +109,18 @@ export class OrderManager {
       data.tick || null,
       data.hookOrderId || null,
       data.deadline || null,
-      data.accountId || null
+      data.accountId || null,
+      data.linkedOrderId || null,
+      data.gasCostUsd ?? null,
+      data.gasUsed ?? null,
+      data.commission || null,
+      data.commissionAsset || null,
+      data.tokenInSymbol || null,
+      data.tokenInAmount || null,
+      data.tokenOutSymbol || null,
+      data.tokenOutAmount || null,
+      data.slippagePercentage ?? null,
+      data.blockNumber ?? null
     )
 
     const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(id) as any
@@ -111,7 +150,8 @@ export class OrderManager {
     if (fillData) {
       db.prepare(`
         UPDATE orders
-        SET status = ?, filled_quantity = ?, filled_price = ?, tx_hash = ?, updated_at = datetime('now')
+        SET status = ?, filled_quantity = ?, filled_price = ?, tx_hash = ?,
+            filled_at = datetime('now'), updated_at = datetime('now')
         WHERE id = ?
       `).run(
         status,
@@ -206,6 +246,14 @@ export class OrderManager {
   }
 
   /**
+   * Link two orders together (sell ↔ buy sides of a swap).
+   */
+  setLinkedOrderId(orderId: string, linkedOrderId: string): void {
+    const db = getDatabase()
+    db.prepare('UPDATE orders SET linked_order_id = ? WHERE id = ?').run(linkedOrderId, orderId)
+  }
+
+  /**
    * Cancel a pending or partial order.
    */
   cancel(orderId: string): Order | null {
@@ -248,7 +296,19 @@ export class OrderManager {
       deadline: row.deadline,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
-      accountId: row.account_id
+      accountId: row.account_id,
+      gasCostUsd: row.gas_cost_usd,
+      gasUsed: row.gas_used,
+      commission: row.commission,
+      commissionAsset: row.commission_asset,
+      tokenInSymbol: row.token_in_symbol,
+      tokenInAmount: row.token_in_amount,
+      tokenOutSymbol: row.token_out_symbol,
+      tokenOutAmount: row.token_out_amount,
+      slippagePercentage: row.slippage_percentage,
+      filledAt: row.filled_at,
+      blockNumber: row.block_number,
+      linkedOrderId: row.linked_order_id
     }
   }
 }

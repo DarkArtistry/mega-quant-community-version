@@ -54,6 +54,7 @@ export abstract class ProtocolProxy {
   protected executionId: string
   protected strategyId: string
   protected apiBaseUrl: string
+  protected accountId?: string
 
   constructor(
     chainName: string,
@@ -61,7 +62,8 @@ export abstract class ProtocolProxy {
     wallet: Wallet,
     protocol: string,
     executionId: string,
-    strategyId: string
+    strategyId: string,
+    accountId?: string
   ) {
     this.chainName = chainName
     this.chainId = chainId
@@ -70,6 +72,7 @@ export abstract class ProtocolProxy {
     this.executionId = executionId
     this.strategyId = strategyId
     this.apiBaseUrl = process.env.API_BASE_URL || 'http://localhost:3001'
+    this.accountId = accountId
   }
 
   // Abstract methods that must be implemented by protocol-specific classes
@@ -104,6 +107,8 @@ export abstract class ProtocolProxy {
     slippage_percentage?: number
     execution_price?: number
     quote_price?: number
+    // Block timestamp for accurate PnL time-series
+    block_timestamp?: string
   }): Promise<void> {
     try {
       // --- Step 1: Post trade to API ---
@@ -130,86 +135,150 @@ export abstract class ProtocolProxy {
         console.error(`[ProtocolProxy] Failed to record trade:`, response.data.error)
       }
 
-      // --- Step 2: Feed PnL Engine ---
+      // --- Step 2: Feed PnL Engine (BOTH sides) ---
+      // In DeFi, both sides of a swap are different tokens.
+      // We track positions for both tokens; the PnlSnapshotter values everything in USD.
       try {
         const { pnlEngine } = await import('./pnl/PnlEngine.js')
 
-        // Determine trade side: if tokenOut is a stablecoin, it's a sell; otherwise it's a buy
         const stablecoins = ['USDC', 'USDT', 'DAI']
-        const isSell = stablecoins.includes(tradeData.token_out_symbol.toUpperCase())
-        const side: 'buy' | 'sell' = isSell ? 'sell' : 'buy'
-
-        // For a sell, the asset is tokenIn (we're selling tokenIn for stablecoin)
-        // For a buy, the asset is tokenOut (we're buying tokenOut with stablecoin)
-        const assetSymbol = isSell ? tradeData.token_in_symbol : tradeData.token_out_symbol
-        const assetAddress = isSell ? tradeData.token_in_address : tradeData.token_out_address
-        const quantity = isSell ? tradeData.token_in_amount : tradeData.token_out_amount
-
-        // Price in USD: for a sell, price = stablecoin_amount / asset_amount
-        // For a buy, price = stablecoin_amount / asset_amount
-        const stablecoinAmount = isSell
-          ? parseFloat(tradeData.token_out_amount)
-          : parseFloat(tradeData.token_in_amount)
-        const assetAmount = parseFloat(quantity)
-        const price = assetAmount > 0 ? (stablecoinAmount / assetAmount).toString() : '0'
-
+        const tokenInAmt = parseFloat(tradeData.token_in_amount)
+        const tokenOutAmt = parseFloat(tradeData.token_out_amount)
         const gasFees = tradeData.gas_cost_usd?.toString() || '0'
+        const timestamp = tradeData.block_timestamp || new Date().toISOString()
+        const tradeId = response.data?.trade_id || tradeData.tx_hash
 
-        const pnlResult = pnlEngine.processTrade({
-          tradeId: response.data?.trade_id || tradeData.tx_hash,
+        // Compute USD prices where possible
+        const tokenInIsStable = stablecoins.includes(tradeData.token_in_symbol.toUpperCase())
+        const tokenOutIsStable = stablecoins.includes(tradeData.token_out_symbol.toUpperCase())
+
+        // Price of token_in in USD
+        let tokenInPriceUsd: string
+        if (tokenInIsStable) {
+          tokenInPriceUsd = '1'
+        } else if (tokenOutIsStable && tokenInAmt > 0) {
+          tokenInPriceUsd = (tokenOutAmt / tokenInAmt).toString()
+        } else {
+          tokenInPriceUsd = '0' // Snapshotter will update with real market price
+        }
+
+        // Price of token_out in USD
+        let tokenOutPriceUsd: string
+        if (tokenOutIsStable) {
+          tokenOutPriceUsd = '1'
+        } else if (tokenInIsStable && tokenOutAmt > 0) {
+          tokenOutPriceUsd = (tokenInAmt / tokenOutAmt).toString()
+        } else {
+          tokenOutPriceUsd = '0' // Snapshotter will update with real market price
+        }
+
+        // Side 1: SELL token_in (position decreases) — gas fees attributed here
+        const sellResult = pnlEngine.processTrade({
+          tradeId: `${tradeId}-sell`,
           strategyId: this.strategyId,
-          side,
-          assetSymbol,
-          assetAddress,
+          side: 'sell',
+          assetSymbol: tradeData.token_in_symbol,
+          assetAddress: tradeData.token_in_address,
           chainId: this.chainId,
-          quantity,
-          price,
-          fees: gasFees
+          quantity: tradeData.token_in_amount,
+          price: tokenInPriceUsd,
+          fees: gasFees,
+          timestamp,
+          accountId: this.accountId,
+          quoteAssetSymbol: tradeData.token_out_symbol,
+          protocol: this.protocol
         })
 
-        console.log(`[ProtocolProxy] PnL processed: action=${pnlResult.action}, realizedPnl=$${pnlResult.realizedPnl.toFixed(4)}`)
+        // Side 2: BUY token_out (position increases) — no fees
+        const buyResult = pnlEngine.processTrade({
+          tradeId: `${tradeId}-buy`,
+          strategyId: this.strategyId,
+          side: 'buy',
+          assetSymbol: tradeData.token_out_symbol,
+          assetAddress: tradeData.token_out_address,
+          chainId: this.chainId,
+          quantity: tradeData.token_out_amount,
+          price: tokenOutPriceUsd,
+          fees: '0',
+          timestamp,
+          accountId: this.accountId,
+          quoteAssetSymbol: tradeData.token_in_symbol,
+          protocol: this.protocol
+        })
+
+        console.log(`[ProtocolProxy] PnL: SELL ${tradeData.token_in_symbol} (${sellResult.action}, PnL=$${sellResult.realizedPnl.toFixed(4)}) + BUY ${tradeData.token_out_symbol} (${buyResult.action})`)
       } catch (error: any) {
         console.warn(`[ProtocolProxy] PnL engine processing failed:`, error.message)
       }
 
-      // --- Step 3: Record in Order Manager ---
+      // --- Step 3: Record BOTH sides in Order Manager ---
+      // A swap is two-sided: SELL token_in and BUY token_out
       try {
         const { orderManager } = await import('./orders/OrderManager.js')
 
-        // Determine side (same logic as PnL)
-        const stablecoins = ['USDC', 'USDT', 'DAI']
-        const isSell = stablecoins.includes(tradeData.token_out_symbol.toUpperCase())
-        const side: 'buy' | 'sell' = isSell ? 'sell' : 'buy'
-        const assetSymbol = isSell ? tradeData.token_in_symbol : tradeData.token_out_symbol
-        const assetAddress = isSell ? tradeData.token_in_address : tradeData.token_out_address
-        const quantity = isSell ? tradeData.token_in_amount : tradeData.token_out_amount
+        // Calculate prices: use the exchange rate between the two tokens
+        const tokenInAmt = parseFloat(tradeData.token_in_amount)
+        const tokenOutAmt = parseFloat(tradeData.token_out_amount)
+        const sellPrice = tokenOutAmt > 0 && tokenInAmt > 0 ? (tokenOutAmt / tokenInAmt).toString() : undefined
+        const buyPrice = tokenInAmt > 0 && tokenOutAmt > 0 ? (tokenInAmt / tokenOutAmt).toString() : undefined
 
-        const stablecoinAmount = isSell
-          ? parseFloat(tradeData.token_out_amount)
-          : parseFloat(tradeData.token_in_amount)
-        const assetAmount = parseFloat(quantity)
-        const price = assetAmount > 0 ? (stablecoinAmount / assetAmount).toString() : undefined
-
-        const order = orderManager.recordOrder({
+        // Order 1: SELL token_in (what we gave up) — full gas fees here
+        const sellOrder = orderManager.recordOrder({
           strategyId: this.strategyId,
           orderType: 'market',
-          side,
-          assetSymbol,
-          assetAddress,
+          side: 'sell',
+          assetSymbol: tradeData.token_in_symbol,
+          assetAddress: tradeData.token_in_address,
           chainId: this.chainId,
           protocol: this.protocol,
-          quantity,
-          price
+          quantity: tradeData.token_in_amount,
+          price: sellPrice,
+          gasCostUsd: tradeData.gas_cost_usd,
+          gasUsed: tradeData.gas_used,
+          tokenInSymbol: tradeData.token_in_symbol,
+          tokenInAmount: tradeData.token_in_amount,
+          tokenOutSymbol: tradeData.token_out_symbol,
+          tokenOutAmount: tradeData.token_out_amount,
+          slippagePercentage: tradeData.slippage_percentage,
+          blockNumber: tradeData.block_number,
+          accountId: this.accountId
         })
-
-        // Immediately fill the market order
-        orderManager.updateOrderStatus(order.id, 'filled', {
-          filledQuantity: quantity,
-          filledPrice: price || '0',
+        orderManager.updateOrderStatus(sellOrder.id, 'filled', {
+          filledQuantity: tradeData.token_in_amount,
+          filledPrice: sellPrice || '0',
           txHash: tradeData.tx_hash
         })
 
-        console.log(`[ProtocolProxy] Order recorded and filled: ${order.id}`)
+        // Order 2: BUY token_out (what we received) — no fees (linked to sell order)
+        const buyOrder = orderManager.recordOrder({
+          strategyId: this.strategyId,
+          orderType: 'market',
+          side: 'buy',
+          assetSymbol: tradeData.token_out_symbol,
+          assetAddress: tradeData.token_out_address,
+          chainId: this.chainId,
+          protocol: this.protocol,
+          quantity: tradeData.token_out_amount,
+          price: buyPrice,
+          tokenInSymbol: tradeData.token_in_symbol,
+          tokenInAmount: tradeData.token_in_amount,
+          tokenOutSymbol: tradeData.token_out_symbol,
+          tokenOutAmount: tradeData.token_out_amount,
+          slippagePercentage: tradeData.slippage_percentage,
+          blockNumber: tradeData.block_number,
+          accountId: this.accountId,
+          linkedOrderId: sellOrder.id
+        })
+        orderManager.updateOrderStatus(buyOrder.id, 'filled', {
+          filledQuantity: tradeData.token_out_amount,
+          filledPrice: buyPrice || '0',
+          txHash: tradeData.tx_hash
+        })
+
+        // Back-link the sell order to the buy order
+        orderManager.setLinkedOrderId(sellOrder.id, buyOrder.id)
+
+        console.log(`[ProtocolProxy] Swap orders recorded: SELL ${tradeData.token_in_symbol} (${sellOrder.id}) ↔ BUY ${tradeData.token_out_symbol} (${buyOrder.id})`)
       } catch (error: any) {
         console.warn(`[ProtocolProxy] Order manager recording failed:`, error.message)
       }

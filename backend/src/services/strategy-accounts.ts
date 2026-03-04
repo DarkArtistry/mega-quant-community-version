@@ -14,8 +14,10 @@ const NETWORK_ID_TO_CHAIN_NAME: Record<number, string> = {
   0: 'cex',
   1: 'ethereum',
   8453: 'base',
+  130: 'unichain',
   11155111: 'sepolia',
-  84532: 'base-sepolia'
+  84532: 'base-sepolia',
+  1301: 'unichain-sepolia'
 }
 
 /**
@@ -32,7 +34,9 @@ import { apiKeyStore } from './api-key-store.js'
 
 export interface StrategyAccountsResult {
   chainPrivateKeys: Record<string, string>
-  cexCredentials: Record<string, { apiKey: string; apiSecret: string }>
+  chainAccountIds: Record<string, string>  // chainName -> accountId
+  cexCredentials: Record<string, { apiKey: string; apiSecret: string; testnet?: boolean }>
+  cexAccountIds: Record<string, string>    // exchangeName -> accountId
 }
 
 export function loadStrategyAccounts(strategyId: string): Record<string, string>
@@ -62,23 +66,27 @@ export function loadStrategyAccounts(strategyId: string, includeCex?: boolean): 
     if (mappings.length === 0) {
       console.warn(`[StrategyAccounts] No accounts configured for strategy ${strategyId}`)
       if (includeCex) {
-        return { chainPrivateKeys: {}, cexCredentials: {} }
+        return { chainPrivateKeys: {}, chainAccountIds: {}, cexCredentials: {}, cexAccountIds: {} }
       }
       return {}
     }
 
     // Load private keys from memory for each network
     const chainPrivateKeys: Record<string, string> = {}
+    const chainAccountIds: Record<string, string> = {}
     const cexCredentials: Record<string, { apiKey: string; apiSecret: string }> = {}
+    const cexAccountIds: Record<string, string> = {}
 
     for (const mapping of mappings) {
       // CEX account (network_id=0)
       if (mapping.network_id === 0 && mapping.exchange_name) {
-        if (mapping.exchange_name === 'binance') {
+        if (mapping.exchange_name?.toLowerCase() === 'binance') {
           const apiKey = apiKeyStore.getBinanceApiKey()
           const apiSecret = apiKeyStore.getBinanceApiSecret()
           if (apiKey && apiSecret) {
-            cexCredentials[mapping.exchange_name] = { apiKey, apiSecret }
+            const exchKey = mapping.exchange_name.toLowerCase()
+            cexCredentials[exchKey] = { apiKey, apiSecret }
+            cexAccountIds[exchKey] = mapping.account_id
             console.log(`[StrategyAccounts] Loaded CEX credentials for ${mapping.exchange_name}`)
           } else {
             console.warn(`[StrategyAccounts] CEX credentials not available for ${mapping.exchange_name}`)
@@ -103,6 +111,7 @@ export function loadStrategyAccounts(strategyId: string, includeCex?: boolean): 
       }
 
       chainPrivateKeys[chainName] = account.privateKey
+      chainAccountIds[chainName] = mapping.account_id
       console.log(`[StrategyAccounts] Loaded account "${account.accountName}" (${account.address}) for ${chainName}`)
     }
 
@@ -110,7 +119,7 @@ export function loadStrategyAccounts(strategyId: string, includeCex?: boolean): 
       if (Object.keys(chainPrivateKeys).length === 0 && Object.keys(cexCredentials).length === 0) {
         throw new Error(`Failed to load any accounts for strategy ${strategyId}`)
       }
-      return { chainPrivateKeys, cexCredentials }
+      return { chainPrivateKeys, chainAccountIds, cexCredentials, cexAccountIds }
     }
 
     if (Object.keys(chainPrivateKeys).length === 0) {
@@ -250,27 +259,32 @@ export function setCexAccountMapping(strategyId: string, exchangeName: string): 
   const db = getDatabase()
   const accountId = `cex-${exchangeName}`
 
-  // Use INSERT OR REPLACE since the UNIQUE constraint is on (strategy_id, network_id).
-  // For CEX we key on exchange_name, so we first check if a mapping with this exchange already exists.
-  const existing = db.prepare(`
-    SELECT id FROM strategy_account_mappings
-    WHERE strategy_id = ? AND network_id = 0 AND exchange_name = ?
-  `).get(strategyId, exchangeName)
-
-  if (existing) {
-    db.prepare(`
-      UPDATE strategy_account_mappings
-      SET account_id = ?, updated_at = CURRENT_TIMESTAMP
+  // CEX accounts use a placeholder account_id that doesn't exist in the accounts table.
+  // Temporarily disable foreign key checks for this insert since 'cex-Binance' is not a real account.
+  db.pragma('foreign_keys = OFF')
+  try {
+    const existing = db.prepare(`
+      SELECT id FROM strategy_account_mappings
       WHERE strategy_id = ? AND network_id = 0 AND exchange_name = ?
-    `).run(accountId, strategyId, exchangeName)
-  } else {
-    db.prepare(`
-      INSERT INTO strategy_account_mappings (strategy_id, network_id, account_id, exchange_name)
-      VALUES (?, 0, ?, ?)
-    `).run(strategyId, accountId, exchangeName)
-  }
+    `).get(strategyId, exchangeName)
 
-  console.log(`[StrategyAccounts] Set CEX account mapping for strategy ${strategyId} exchange ${exchangeName}`)
+    if (existing) {
+      db.prepare(`
+        UPDATE strategy_account_mappings
+        SET account_id = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE strategy_id = ? AND network_id = 0 AND exchange_name = ?
+      `).run(accountId, strategyId, exchangeName)
+    } else {
+      db.prepare(`
+        INSERT INTO strategy_account_mappings (strategy_id, network_id, account_id, exchange_name)
+        VALUES (?, 0, ?, ?)
+      `).run(strategyId, accountId, exchangeName)
+    }
+
+    console.log(`[StrategyAccounts] Set CEX account mapping for strategy ${strategyId} exchange ${exchangeName}`)
+  } finally {
+    db.pragma('foreign_keys = ON')
+  }
 }
 
 /**

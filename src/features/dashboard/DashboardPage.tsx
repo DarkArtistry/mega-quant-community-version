@@ -5,6 +5,7 @@ import { PnlLineChart } from '@/components/charts/PnlLineChart'
 import { useLiveDataStore } from '@/stores/useLiveDataStore'
 import { cn } from '@/components/ui/utils'
 import { pnlApi, type PnlBreakdown } from '@/api/pnl'
+import { WalletBalancesCard } from './WalletBalancesCard'
 import type { Position } from '@/types'
 
 export function DashboardPage() {
@@ -98,43 +99,8 @@ export function DashboardPage() {
         </div>
       )}
 
-      {/* Portfolio Breakdown by Account */}
-      {isLoading ? (
-        <SkeletonTable rows={3} cols={3} />
-      ) : (
-        <div className="rounded border border-border bg-surface p-3">
-          <h3 className="text-xs font-medium text-text-secondary mb-2">Portfolio Breakdown</h3>
-          {accounts.length === 0 ? (
-            <div className="text-xs text-text-tertiary">No accounts with positions</div>
-          ) : (
-            <table className="w-full text-left">
-              <thead>
-                <tr className="border-b border-border text-2xs text-text-tertiary">
-                  <th className="pb-1.5 font-medium">Account</th>
-                  <th className="pb-1.5 font-medium text-right">Realized PnL</th>
-                  <th className="pb-1.5 font-medium text-right">Total PnL</th>
-                </tr>
-              </thead>
-              <tbody>
-                {accounts.map((acct) => (
-                  <tr
-                    key={acct.accountId}
-                    className="border-b border-border last:border-b-0 hover:bg-background"
-                  >
-                    <td className="py-1.5 text-2xs text-text-primary">{acct.accountName || acct.accountId}</td>
-                    <td className="py-1.5 text-2xs font-mono tabular-nums text-right">
-                      <PnlInline value={acct.totalRealizedPnl} />
-                    </td>
-                    <td className="py-1.5 text-2xs font-mono tabular-nums text-right">
-                      <PnlInline value={acct.totalPnl} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      )}
+      {/* Wallet Balances */}
+      <WalletBalancesCard />
 
       {/* Charts + Recent Trades */}
       {isLoading ? (
@@ -210,8 +176,9 @@ export function DashboardPage() {
           <table className="w-full text-left">
             <thead>
               <tr className="border-b border-border text-2xs text-text-tertiary">
-                <th className="pb-1.5 font-medium">Asset</th>
+                <th className="pb-1.5 font-medium">Pair</th>
                 <th className="pb-1.5 font-medium">Side</th>
+                <th className="pb-1.5 font-medium">Venue</th>
                 <th className="pb-1.5 font-medium text-right">Qty</th>
                 <th className="pb-1.5 font-medium text-right">Avg Entry</th>
                 <th className="pb-1.5 font-medium text-right">Unrealized PnL</th>
@@ -220,9 +187,17 @@ export function DashboardPage() {
             <tbody>
               {positions.map((pos) => (
                 <tr key={pos.id} className="border-b border-border last:border-b-0 hover:bg-background">
-                  <td className="py-1.5 text-2xs font-medium text-text-primary">{pos.asset_symbol}</td>
+                  <td className="py-1.5 text-2xs font-medium text-text-primary">
+                    {pos.asset_symbol}
+                    {pos.quote_asset_symbol && (
+                      <span className="text-text-tertiary"> / {pos.quote_asset_symbol}</span>
+                    )}
+                  </td>
                   <td className="py-1.5 text-2xs">
                     <span className={pos.side === 'long' ? 'text-positive' : 'text-negative'}>{pos.side}</span>
+                  </td>
+                  <td className="py-1.5 text-2xs text-text-secondary">
+                    {pos.protocol || getVenueName(pos.chain_id)}
                   </td>
                   <td className="py-1.5 text-2xs font-mono tabular-nums text-right text-text-secondary">{pos.quantity}</td>
                   <td className="py-1.5 text-2xs font-mono tabular-nums text-right text-text-secondary">{pos.avg_entry_price}</td>
@@ -273,6 +248,20 @@ function SummaryCard({
       )}
     </div>
   )
+}
+
+const CHAIN_NAMES: Record<number, string> = {
+  1: 'Ethereum',
+  8453: 'Base',
+  130: 'Unichain',
+  11155111: 'Sepolia',
+  84532: 'Base Sepolia',
+  1301: 'Unichain Sepolia',
+}
+
+function getVenueName(chainId?: number): string {
+  if (!chainId) return 'Binance'
+  return CHAIN_NAMES[chainId] || `Chain ${chainId}`
 }
 
 function PnlInline({ value }: { value: number }) {

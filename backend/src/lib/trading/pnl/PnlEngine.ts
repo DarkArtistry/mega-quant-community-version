@@ -20,6 +20,8 @@ export interface TradeInput {
   fees?: string
   timestamp?: string
   accountId?: string
+  quoteAssetSymbol?: string
+  protocol?: string
 }
 
 export interface Position {
@@ -38,6 +40,8 @@ export interface Position {
   status: 'open' | 'closed'
   openedAt: string
   closedAt?: string | null
+  quoteAssetSymbol?: string | null
+  protocol?: string | null
 }
 
 export interface PnlSummary {
@@ -63,6 +67,8 @@ export class PnlEngine {
     const price = parseFloat(trade.price)
     const fees = parseFloat(trade.fees || '0')
     const accountId = trade.accountId || null
+    const quoteAssetSymbol = trade.quoteAssetSymbol || null
+    const protocol = trade.protocol || null
 
     // Find existing open position for this asset + strategy (+ account if provided)
     let positionLookupSql = `
@@ -93,8 +99,8 @@ export class PnlEngine {
         action = 'open'
 
         db.prepare(`
-          INSERT INTO positions (id, strategy_id, asset_symbol, asset_address, chain_id, side, quantity, avg_entry_price, realized_pnl, total_fees, status, account_id)
-          VALUES (?, ?, ?, ?, ?, 'long', ?, ?, '0', ?, 'open', ?)
+          INSERT INTO positions (id, strategy_id, asset_symbol, asset_address, chain_id, side, quantity, avg_entry_price, realized_pnl, total_fees, status, account_id, quote_asset_symbol, protocol)
+          VALUES (?, ?, ?, ?, ?, 'long', ?, ?, '0', ?, 'open', ?, ?, ?)
         `).run(
           positionId,
           trade.strategyId,
@@ -104,7 +110,9 @@ export class PnlEngine {
           trade.quantity,
           trade.price,
           fees.toString(),
-          accountId
+          accountId,
+          quoteAssetSymbol,
+          protocol
         )
       } else if (existingPosition.side === 'long') {
         // Add to existing long position (average up)
@@ -176,8 +184,8 @@ export class PnlEngine {
         action = 'open'
 
         db.prepare(`
-          INSERT INTO positions (id, strategy_id, asset_symbol, asset_address, chain_id, side, quantity, avg_entry_price, realized_pnl, total_fees, status, account_id)
-          VALUES (?, ?, ?, ?, ?, 'short', ?, ?, '0', ?, 'open', ?)
+          INSERT INTO positions (id, strategy_id, asset_symbol, asset_address, chain_id, side, quantity, avg_entry_price, realized_pnl, total_fees, status, account_id, quote_asset_symbol, protocol)
+          VALUES (?, ?, ?, ?, ?, 'short', ?, ?, '0', ?, 'open', ?, ?, ?)
         `).run(
           positionId,
           trade.strategyId,
@@ -187,7 +195,9 @@ export class PnlEngine {
           trade.quantity,
           trade.price,
           fees.toString(),
-          accountId
+          accountId,
+          quoteAssetSymbol,
+          protocol
         )
       } else if (existingPosition.side === 'long') {
         // Selling against a long position - reduce long (realize PnL)
@@ -286,7 +296,9 @@ export class PnlEngine {
       totalFees: updatedPosition.total_fees,
       status: updatedPosition.status,
       openedAt: updatedPosition.opened_at,
-      closedAt: updatedPosition.closed_at
+      closedAt: updatedPosition.closed_at,
+      quoteAssetSymbol: updatedPosition.quote_asset_symbol,
+      protocol: updatedPosition.protocol
     }
 
     return { position, realizedPnl, action }
@@ -297,14 +309,23 @@ export class PnlEngine {
    */
   updateUnrealizedPnl(currentPrices: Record<string, number>): void {
     const db = getDatabase()
+    const stablecoins = ['USDC', 'USDT', 'DAI', 'BUSD', 'TUSD', 'FDUSD']
 
     const openPositions = db.prepare(`
       SELECT * FROM positions WHERE status = 'open'
     `).all() as any[]
 
     for (const pos of openPositions) {
-      const currentPrice = currentPrices[pos.asset_symbol]
-      if (currentPrice === undefined) continue
+      // Stablecoins always worth $1
+      let currentPrice = currentPrices[pos.asset_symbol]
+      if (currentPrice === undefined && stablecoins.includes(pos.asset_symbol.toUpperCase())) {
+        currentPrice = 1
+      }
+      if (currentPrice === undefined) {
+        // Zero out unrealized PnL when no market price available (e.g. testnet tokens)
+        db.prepare('UPDATE positions SET unrealized_pnl = ? WHERE id = ?').run('0', pos.id)
+        continue
+      }
 
       const quantity = parseFloat(pos.quantity)
       const avgEntry = parseFloat(pos.avg_entry_price)
@@ -421,7 +442,9 @@ export class PnlEngine {
       totalFees: row.total_fees,
       status: row.status,
       openedAt: row.opened_at,
-      closedAt: row.closed_at
+      closedAt: row.closed_at,
+      quoteAssetSymbol: row.quote_asset_symbol,
+      protocol: row.protocol
     }))
   }
 

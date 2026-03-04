@@ -65,6 +65,8 @@ export interface Position {
   status: 'open' | 'closed'
   opened_at: string
   closed_at?: string
+  quote_asset_symbol?: string
+  protocol?: string
 }
 
 export interface PnlSnapshot {
@@ -96,16 +98,33 @@ export interface Order {
   deadline?: string
   created_at: string
   updated_at: string
+  // Enriched detail fields
+  gas_cost_usd?: number
+  gas_used?: number
+  commission?: string
+  commission_asset?: string
+  token_in_symbol?: string
+  token_in_amount?: string
+  token_out_symbol?: string
+  token_out_amount?: string
+  slippage_percentage?: number
+  filled_at?: string
+  block_number?: number
+  tx_hash?: string
+  account_id?: string
+  strategy_name?: string
+  linked_order_id?: string
 }
 
 export interface Account {
   id: string
   name: string
   address: string
-  account_type: 'imported' | 'hd'
-  private_key?: string
-  hd_wallet_id?: string
-  derivation_index?: number
+  accountType: 'imported' | 'hd'
+  privateKey?: string
+  hdWalletId?: string
+  derivationIndex?: number
+  derivationPath?: string
   created_at: string
 }
 
@@ -117,6 +136,7 @@ export interface ApiConfig {
   oneinch_api_key: string
   binance_api_key: string
   binance_api_secret: string
+  binance_testnet: boolean
 }
 
 export interface NetworkConfig {

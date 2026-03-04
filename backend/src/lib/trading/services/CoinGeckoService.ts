@@ -15,7 +15,7 @@ const SYMBOL_TO_COINGECKO_ID: Record<string, string> = {
   'ETH': 'ethereum',
   'WETH': 'ethereum',
   'BTC': 'bitcoin',
-  'WBTC': 'bitcoin',
+  'WBTC': 'wrapped-bitcoin',
   'USDC': 'usd-coin',
   'USDT': 'tether',
   'DAI': 'dai',
@@ -26,6 +26,12 @@ const SYMBOL_TO_COINGECKO_ID: Record<string, string> = {
   'SOL': 'solana',
   'ARB': 'arbitrum',
   'OP': 'optimism',
+  'MON': 'monad',
+  'SHIB': 'shiba-inu',
+  'MNT': 'mantle',
+  'DOT': 'polkadot',
+  'WLD': 'worldcoin-wld',
+  'STETH': 'staked-ether',
 }
 
 class CoinGeckoService {

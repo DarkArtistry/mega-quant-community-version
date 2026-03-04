@@ -24,9 +24,10 @@ export class UniswapV3Protocol extends ProtocolProxy {
     chainId: number,
     wallet: Wallet,
     executionId: string,
-    strategyId: string
+    strategyId: string,
+    accountId?: string
   ) {
-    super(chainName, chainId, wallet, 'uniswap-v3', executionId, strategyId)
+    super(chainName, chainId, wallet, 'uniswap-v3', executionId, strategyId, accountId)
 
     const chainConfig = getChainConfig(chainName)
     if (!chainConfig.uniswapV3) {
@@ -162,7 +163,18 @@ export class UniswapV3Protocol extends ProtocolProxy {
       console.log(`[UniswapV3] Slippage: ${slippageData.slippagePercentage.toFixed(4)}% (${slippageData.slippageAmount} ${tokenOutInfo.symbol})`)
       console.log(`[UniswapV3] Quote price: ${slippageData.quotePrice.toFixed(6)}, Execution price: ${slippageData.executionPrice.toFixed(6)}`)
 
-      // 11. Calculate gas cost
+      // 11. Fetch block timestamp for accurate PnL time-series
+      let blockTimestamp: string | undefined
+      try {
+        const block = await this.wallet.provider!.getBlock(receipt.blockNumber)
+        if (block) {
+          blockTimestamp = new Date(block.timestamp * 1000).toISOString()
+        }
+      } catch (error: any) {
+        console.warn('[UniswapV3] Could not fetch block timestamp:', error.message)
+      }
+
+      // 12. Calculate gas cost
       const gasUsed = Number(receipt.gasUsed)
       const gasPrice = receipt.gasPrice || 0n
       const gasPriceGwei = formatUnits(gasPrice, 'gwei')
@@ -176,7 +188,7 @@ export class UniswapV3Protocol extends ProtocolProxy {
       const gasCostEth = Number(formatUnits(gasPrice * receipt.gasUsed, 18))
       const gasCostUsd = gasCostEth * nativeTokenPrice
 
-      // 12. Record trade in database with slippage data (non-blocking)
+      // 13. Record trade in database with slippage data (non-blocking)
       await this.recordTrade({
         tx_hash: receipt.hash,
         block_number: receipt.blockNumber,
@@ -194,7 +206,8 @@ export class UniswapV3Protocol extends ProtocolProxy {
         slippage_amount: slippageData.slippageAmount,
         slippage_percentage: slippageData.slippagePercentage,
         quote_price: slippageData.quotePrice,
-        execution_price: slippageData.executionPrice
+        execution_price: slippageData.executionPrice,
+        block_timestamp: blockTimestamp
       })
 
       // Build explorer URL

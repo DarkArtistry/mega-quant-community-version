@@ -7,8 +7,10 @@ import { apiKeyStore } from '../../../services/api-key-store.js'
 const NETWORK_TO_CHAIN_ID: Record<string, number> = {
   'ethereum': 1,
   'base': 8453,
+  'unichain': 130,
   'sepolia': 11155111,
-  'base-sepolia': 84532
+  'base-sepolia': 84532,
+  'unichain-sepolia': 1301
 }
 
 // Alchemy network slugs for building RPC URLs
@@ -61,10 +63,12 @@ function getRpcUrl(network: string, templateUrl: string): string {
 
   // PRIORITY 4: Fall back to public RPC
   const PUBLIC_FALLBACKS: Record<string, string> = {
-    'ethereum': 'https://eth.llamarpc.com',
-    'base': 'https://base.llamarpc.com',
+    'ethereum': 'https://ethereum-rpc.publicnode.com',
+    'base': 'https://base-rpc.publicnode.com',
+    'unichain': 'https://mainnet.unichain.org',
     'sepolia': 'https://ethereum-sepolia-rpc.publicnode.com',
-    'base-sepolia': 'https://base-sepolia-rpc.publicnode.com'
+    'base-sepolia': 'https://base-sepolia-rpc.publicnode.com',
+    'unichain-sepolia': 'https://sepolia.unichain.org'
   }
 
   const publicUrl = PUBLIC_FALLBACKS[network] || templateUrl
@@ -134,7 +138,8 @@ const CHAIN_CONFIGS_TEMPLATE: Record<string, ChainConfig> = {
     blockExplorer: 'https://etherscan.io',
     uniswapV3: {
       router: '0xE592427A0AEce92De3Edee1F18E0157C05861564',
-      quoter: '0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6',
+      quoter: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e', // QuoterV2 — returns gas estimates
+      quoterVersion: 2,
       factory: '0x1F98431c8aD98523631AE4a59f267346ea31F984',
       nftPositionManager: '0xC36442b4a4522E871399CD717aBDD847Ab11FE88'
     },
@@ -160,7 +165,8 @@ const CHAIN_CONFIGS_TEMPLATE: Record<string, ChainConfig> = {
     blockExplorer: 'https://basescan.org',
     uniswapV3: {
       router: '0x2626664c2603336E57B271c5C0b26F421741e481',
-      quoter: '0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a',
+      quoter: '0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a', // QuoterV2 on Base
+      quoterVersion: 2,
       factory: '0x33128a8fC17869897dcE68Ed026d694621f6FDfD',
       nftPositionManager: '0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1'
     },
@@ -172,6 +178,34 @@ const CHAIN_CONFIGS_TEMPLATE: Record<string, ChainConfig> = {
       stateView: '0xa3c0c9b65bad0b08107aa264b0f3db444b867a71'
     },
     oneInchSupported: true
+  },
+
+  unichain: {
+    chainId: 130,
+    name: 'Unichain',
+    rpcUrl: 'https://mainnet.unichain.org',
+    nativeCurrency: {
+      name: 'Ether',
+      symbol: 'ETH',
+      decimals: 18
+    },
+    blockExplorer: 'https://uniscan.xyz',
+    uniswapV3: {
+      router: '0x73855d06de49d0fe4a9c42636ba96c62da12ff9c',
+      routerVersion: 2,
+      quoter: '0x385a5cf5f83e99f7bb2852b6a19c3538b9fa7658',
+      quoterVersion: 2,
+      factory: '0x1f98400000000000000000000000000000000003',
+      nftPositionManager: '0x943e6e07a7e880e09e0b8b40ef1e7d8e97e09bfa',
+    },
+    uniswapV4: {
+      poolManager: '0x1f98400000000000000000000000000000000004',
+      positionManager: '0x4529a01c7a0410167c5740c487a8de60232617bf',
+      universalRouter: '0xef740bf23acae26f6492b10de645d6b98dc8eaf3',
+      quoter: '0x333e3c607b141b18ff6de9f258db6e77fe7491e0',
+      stateView: '0x0000000000000000000000000000000000000000',
+    },
+    oneInchSupported: false,
   },
 
   // Testnets
@@ -186,12 +220,11 @@ const CHAIN_CONFIGS_TEMPLATE: Record<string, ChainConfig> = {
     },
     blockExplorer: 'https://sepolia.etherscan.io',
     uniswapV3: {
-      // Community-deployed Uniswap V3 contracts on Sepolia
-      router: '0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD', // Universal Router (supports V3)
-      routerVersion: 2, // SwapRouter02 variant
+      router: '0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E', // SwapRouter02 on Sepolia
+      routerVersion: 2,
       quoter: '0xEd1f6473345F45b75F8179591dd5bA1888cf2FB3', // QuoterV2
       quoterVersion: 2,
-      factory: '0x0227628f3F023bb0B980b67D528571c95c6DaC1c', // V3 Factory
+      factory: '0x0227628f3F023bb0B980b67D528571c95c6DaC1c',
       nftPositionManager: '0x1238536071E1c677A632429e3655c799b22cDA52'
     },
     uniswapV4: {
@@ -230,6 +263,34 @@ const CHAIN_CONFIGS_TEMPLATE: Record<string, ChainConfig> = {
       stateView: '0x571291b572ed32ce6751a2cb2486ebee8defb9b4'
     },
     oneInchSupported: false
+  },
+
+  'unichain-sepolia': {
+    chainId: 1301,
+    name: 'Unichain Sepolia Testnet',
+    rpcUrl: 'https://sepolia.unichain.org',
+    nativeCurrency: {
+      name: 'Sepolia Ether',
+      symbol: 'ETH',
+      decimals: 18
+    },
+    blockExplorer: 'https://sepolia.uniscan.xyz',
+    uniswapV3: {
+      router: '0x73855d06de49d0fe4a9c42636ba96c62da12ff9c',
+      routerVersion: 2,
+      quoter: '0x385a5cf5f83e99f7bb2852b6a19c3538b9fa7658',
+      quoterVersion: 2,
+      factory: '0x1f98400000000000000000000000000000000003',
+      nftPositionManager: '0x943e6e07a7e880e09e0b8b40ef1e7d8e97e09bfa',
+    },
+    uniswapV4: {
+      poolManager: '0xC81462Fec8B23319F288047f8A03A57682a35C1A',
+      positionManager: '0xB433cB9BcEF07d25E33A42C793C746C8f10EC103',
+      universalRouter: '0xf70536B3bcC1bD1a972dc186A2cf84cC6da6Be5D',
+      quoter: '0xf3a39C86DfEd7B1A740f9D3fb4046B8dD8d3267C',
+      stateView: '0x0000000000000000000000000000000000000000',
+    },
+    oneInchSupported: false,
   }
 }
 

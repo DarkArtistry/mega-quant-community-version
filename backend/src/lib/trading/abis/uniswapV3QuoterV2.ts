@@ -50,5 +50,20 @@ export const UNISWAP_V3_QUOTER_V2_ABI = [
     ],
     stateMutability: 'nonpayable',
     type: 'function'
+  },
+  {
+    inputs: [
+      { name: 'path', type: 'bytes' },
+      { name: 'amountIn', type: 'uint256' }
+    ],
+    name: 'quoteExactInput',
+    outputs: [
+      { name: 'amountOut', type: 'uint256' },
+      { name: 'sqrtPriceX96AfterList', type: 'uint160[]' },
+      { name: 'initializedTicksCrossedList', type: 'uint32[]' },
+      { name: 'gasEstimate', type: 'uint256' }
+    ],
+    stateMutability: 'nonpayable',
+    type: 'function'
   }
 ] as const

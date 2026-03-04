@@ -20,8 +20,11 @@ import ordersRouter from './routes/orders.js'
 import pricesRouter from './routes/prices.js'
 import strategyRunnerRouter from './routes/strategy-runner.js'
 import accountActivityRouter from './routes/account-activity.js'
+import healthCheckRouter from './routes/health-check.js'
+import walletsRouter from './routes/wallets.js'
 import { strategyRunnerManager } from './lib/strategy/StrategyRunner.js'
 import { pnlSnapshotter } from './lib/trading/pnl/PnlSnapshotter.js'
+import { orderReconciler } from './services/order-reconciler.js'
 
 dotenv.config()
 
@@ -68,6 +71,8 @@ app.use('/api/orders', ordersRouter)
 app.use('/api/prices', pricesRouter)
 app.use('/api/strategy-runner', strategyRunnerRouter)
 app.use('/api/account-activity', accountActivityRouter)
+app.use('/api/health', healthCheckRouter)
+app.use('/api/wallets', walletsRouter)
 
 // Error handling middleware
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -118,6 +123,10 @@ async function startServer() {
       // Start PnL snapshotter (hourly snapshots)
       pnlSnapshotter.start()
       console.log(`[PnlSnapshotter] Started with 1-hour interval`)
+
+      // Start order reconciler (checks pending orders every 30s)
+      orderReconciler.start()
+      console.log(`[OrderReconciler] Started with 30-second interval`)
     })
   } catch (error) {
     console.error('Failed to start server:', error)
@@ -130,6 +139,7 @@ process.on('SIGINT', async () => {
   console.log('\n\nShutting down gracefully...')
   await strategyRunnerManager.stopAll()
   pnlSnapshotter.stop()
+  orderReconciler.stop()
   liveDataService.shutdown()
   closeDatabase()
   process.exit(0)
@@ -139,6 +149,7 @@ process.on('SIGTERM', async () => {
   console.log('\n\nShutting down gracefully...')
   await strategyRunnerManager.stopAll()
   pnlSnapshotter.stop()
+  orderReconciler.stop()
   liveDataService.shutdown()
   closeDatabase()
   process.exit(0)

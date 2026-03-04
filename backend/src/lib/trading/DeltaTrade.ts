@@ -5,6 +5,10 @@ import { formatUnits } from 'ethers'
 import { ChainProxy } from './ChainProxy.js'
 import { TOKEN_ADDRESSES } from './config/tokens.js'
 import { getChainConfig } from './config/chains.js'
+import { BinanceProxy } from './cex/BinanceProxy.js'
+import { orderManager, type Order } from './orders/OrderManager.js'
+import { pnlEngine, type PnlSummary, type Position } from './pnl/PnlEngine.js'
+import type { StrategyAccountsResult } from '../../services/strategy-accounts.js'
 import axios from 'axios'
 
 export interface TokenBalance {
@@ -31,27 +35,52 @@ export class DeltaTrade {
   public readonly strategyId: string
   public readonly executionType: string
   private readonly chainPrivateKeys: Record<string, string> // Per-chain private keys
+  private readonly chainAccountIds: Record<string, string>  // Per-chain account IDs
 
   private startingInventory: TokenBalance[] = []
   private endingInventory: TokenBalance[] = []
   private apiBaseUrl: string
 
-  // Chain proxies (only Ethereum, Sepolia, Base, Base Sepolia)
+  // Chain proxies
   public readonly ethereum?: ChainProxy
   public readonly base?: ChainProxy
+  public readonly unichain?: ChainProxy
   public readonly sepolia?: ChainProxy
   public readonly 'base-sepolia'?: ChainProxy
+  public readonly 'unichain-sepolia'?: ChainProxy
+
+  // CEX proxies
+  public readonly binance?: BinanceProxy
+
+  // Strategy-scoped accessors
+  public readonly orders: {
+    getAll(): Order[]
+    getPending(): Order[]
+    getHistory(limit?: number): { orders: Order[]; total: number }
+    getByAsset(symbol: string): Order[]
+  }
+
+  public readonly pnl: {
+    getTotal(): PnlSummary
+    getHourly(hours?: number): any[]
+    getPositions(status?: 'open' | 'closed' | 'all'): Position[]
+    getRealized(): { realizedPnl: number; totalFees: number }
+  }
 
   constructor(
     executionId: string,
     strategyId: string,
     executionType: string,
-    chainPrivateKeys: Record<string, string> // chainName -> privateKey mapping
+    chainPrivateKeys: Record<string, string>, // chainName -> privateKey mapping
+    cexCredentials?: Record<string, { apiKey: string; apiSecret: string; testnet?: boolean }>,
+    chainAccountIds?: Record<string, string>,
+    cexAccountIds?: Record<string, string>
   ) {
     this.executionId = executionId
     this.strategyId = strategyId
     this.executionType = executionType
     this.chainPrivateKeys = chainPrivateKeys
+    this.chainAccountIds = chainAccountIds || {}
     this.apiBaseUrl = process.env.API_BASE_URL || 'http://localhost:3001'
 
     console.log(`[DeltaTrade] Created execution ${executionId} for strategy ${strategyId}`)
@@ -64,12 +93,46 @@ export class DeltaTrade {
     for (const chainName of chains) {
       try {
         const privateKey = chainPrivateKeys[chainName]
-        const proxy = new ChainProxy(chainName, privateKey, this)
+        const accountId = this.chainAccountIds[chainName]
+        const proxy = new ChainProxy(chainName, privateKey, this, accountId)
         ;(this as any)[chainName] = proxy
-        console.log(`[DeltaTrade] Initialized ${chainName} proxy`)
+        console.log(`[DeltaTrade] Initialized ${chainName} proxy (account: ${accountId || 'none'})`)
       } catch (error: any) {
         console.warn(`[DeltaTrade] Could not initialize ${chainName}: ${error.message}`)
       }
+    }
+
+    // Initialize Binance proxy if credentials are provided
+    if (cexCredentials?.binance) {
+      const isTestnet = cexCredentials.binance.testnet ?? false
+      const binanceAccountId = cexAccountIds?.binance
+      this.binance = new BinanceProxy(strategyId, {
+        apiKey: cexCredentials.binance.apiKey,
+        apiSecret: cexCredentials.binance.apiSecret,
+        testnet: isTestnet
+      }, binanceAccountId)
+      console.log(`[DeltaTrade] Initialized Binance proxy (testnet: ${isTestnet}, account: ${binanceAccountId || 'none'})`)
+    }
+
+    // Bind strategy-scoped order accessors
+    this.orders = {
+      getAll: () => orderManager.getAll(this.strategyId),
+      getPending: () => orderManager.getPending().filter(o => o.strategyId === this.strategyId),
+      getHistory: (limit?: number) => orderManager.getHistory(limit),
+      getByAsset: (symbol: string) => orderManager.getAll(this.strategyId).filter(o => o.assetSymbol === symbol),
+    }
+
+    // Bind strategy-scoped PnL accessors
+    this.pnl = {
+      getTotal: () => pnlEngine.getTotalPnl(this.strategyId),
+      getHourly: (hours?: number) => pnlEngine.getHourlyPnl(hours, this.strategyId),
+      getPositions: (status?: 'open' | 'closed' | 'all') => pnlEngine.getPositions(this.strategyId, status),
+      getRealized: () => {
+        const summary = pnlEngine.getTotalPnl(this.strategyId)
+        const closedPositions = pnlEngine.getPositions(this.strategyId, 'closed')
+        const totalFees = closedPositions.reduce((sum, p) => sum + parseFloat(p.totalFees), 0)
+        return { realizedPnl: summary.totalRealizedPnl, totalFees }
+      },
     }
   }
 
@@ -282,9 +345,8 @@ export class DeltaTrade {
    */
   private getAllChainProxies(): Record<string, ChainProxy> {
     const proxies: Record<string, ChainProxy> = {}
-    const chainNames = ['ethereum', 'base', 'sepolia', 'base-sepolia']
 
-    for (const chainName of chainNames) {
+    for (const chainName of Object.keys(this.chainPrivateKeys)) {
       const proxy = (this as any)[chainName]
       if (proxy instanceof ChainProxy) {
         proxies[chainName] = proxy
@@ -329,15 +391,23 @@ export async function createDeltaTrade(
 ): Promise<DeltaTrade> {
   const apiBaseUrl = process.env.API_BASE_URL || 'http://localhost:3001'
 
-  // Load strategy accounts from memory (populated at unlock)
+  // Load strategy accounts from memory (populated at unlock), including CEX credentials
   const { loadStrategyAccounts } = await import('../../services/strategy-accounts.js')
-  const chainPrivateKeys = loadStrategyAccounts(strategyId)
+  const { chainPrivateKeys, chainAccountIds, cexCredentials, cexAccountIds } = loadStrategyAccounts(strategyId, true)
 
-  if (Object.keys(chainPrivateKeys).length === 0) {
+  if (Object.keys(chainPrivateKeys).length === 0 && Object.keys(cexCredentials).length === 0) {
     throw new Error(
       `No accounts configured for strategy ${strategyId}. ` +
       'Please configure accounts in the Account Manager before running the strategy.'
     )
+  }
+
+  // Enrich Binance credentials with testnet flag
+  if (cexCredentials.binance) {
+    try {
+      const { apiKeyStore } = await import('../../services/api-key-store.js')
+      ;(cexCredentials.binance as any).testnet = apiKeyStore.isBinanceTestnet()
+    } catch { /* fallback to production */ }
   }
 
   // Create execution in database
@@ -364,10 +434,10 @@ export async function createDeltaTrade(
   }
 
   console.log(`[createDeltaTrade] Created execution: ${executionId}`)
-  console.log(`[createDeltaTrade] Loaded accounts for ${Object.keys(chainPrivateKeys).length} networks`)
+  console.log(`[createDeltaTrade] Loaded accounts for ${Object.keys(chainPrivateKeys).length} chains, ${Object.keys(cexCredentials).length} CEX exchanges`)
 
-  // Create DeltaTrade instance
-  const dt = new DeltaTrade(executionId, strategyId, executionType, chainPrivateKeys)
+  // Create DeltaTrade instance with chain and CEX credentials
+  const dt = new DeltaTrade(executionId, strategyId, executionType, chainPrivateKeys, cexCredentials, chainAccountIds, cexAccountIds)
 
   // Initialize protocols on all chains (async imports)
   await dt.initProtocols()

@@ -73,6 +73,7 @@ export function StrategyEditor({
   const [hasMoreLogs, setHasMoreLogs] = useState(false)
   const [oldestLogId, setOldestLogId] = useState<string | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
+  const maxDisplayLogs = useRef(1000)
 
   // Resizable panel state
   const [bottomHeight, setBottomHeight] = useState(200)
@@ -118,6 +119,8 @@ export function StrategyEditor({
           level: l.level as LogEntry['level'],
           message: l.message,
         }))
+        // Increase the cap to accommodate older logs
+        maxDisplayLogs.current += 1000
         setLogs((prev) => [...entries, ...prev])
         setHasMoreLogs(res.data.hasMore)
         setOldestLogId(res.data.oldestId ? String(res.data.oldestId) : null)
@@ -175,7 +178,14 @@ export function StrategyEditor({
             level: entry.level as LogEntry['level'],
             message: entry.message,
           }))
-          setLogs((prev) => [...prev, ...newLogs])
+          setLogs((prev) => {
+            const combined = [...prev, ...newLogs]
+            if (combined.length > maxDisplayLogs.current) {
+              setHasMoreLogs(true)
+              return combined.slice(-maxDisplayLogs.current)
+            }
+            return combined
+          })
           lastLogTimestamp.current = entries[entries.length - 1].timestamp
         }
         // Sync actual backend state back to parent

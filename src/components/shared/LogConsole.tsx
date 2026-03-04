@@ -1,10 +1,29 @@
-import { useRef, useEffect } from 'react'
+import { useRef, useEffect, type ReactNode } from 'react'
 import { cn } from '@/components/ui/utils'
 
 export interface LogEntry {
   timestamp: string
   level: 'log' | 'info' | 'warn' | 'error'
   message: string
+}
+
+const URL_REGEX = /(https?:\/\/[^\s),]+)/g
+const TX_HASH_IN_URL = /\/tx\/(0x[0-9a-fA-F]+)$/
+
+function linkifyMessage(message: string): ReactNode {
+  const parts = message.split(URL_REGEX)
+  if (parts.length === 1) return message
+  return parts.map((part, i) => {
+    if (URL_REGEX.test(part)) {
+      // For block explorer tx URLs, show just the truncated hash
+      const txMatch = part.match(TX_HASH_IN_URL)
+      const label = txMatch ? txMatch[1] : part
+      return (
+        <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="text-info hover:underline">{label}</a>
+      )
+    }
+    return part
+  })
 }
 
 const levelColors: Record<LogEntry['level'], string> = {
@@ -65,7 +84,7 @@ export function LogConsole({ logs, className, maxHeight = '200px' }: LogConsoleP
               <span className={cn('shrink-0 font-semibold select-none', levelColors[log.level])}>
                 [{levelLabels[log.level]}]
               </span>
-              <span className="text-text-secondary break-all whitespace-pre-wrap">{log.message}</span>
+              <span className="text-text-secondary break-all whitespace-pre-wrap">{linkifyMessage(log.message)}</span>
             </div>
           ))
         )}

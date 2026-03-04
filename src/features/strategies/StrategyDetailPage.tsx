@@ -74,10 +74,14 @@ export function StrategyDetailPage({ strategyId, onBack }: StrategyDetailPagePro
 
   const handleStop = async () => {
     try {
-      await strategyRunnerApi.stop(strategyId)
-      setStrategy((prev) => (prev ? { ...prev, status: 'stopped' } : prev))
-    } catch (err) {
+      const res = await strategyRunnerApi.stop(strategyId)
+      // Use the actual state from the backend response
+      const backendState = (res.data?.status?.state || 'stopped') as Strategy['status']
+      setStrategy((prev) => (prev ? { ...prev, status: backendState } : prev))
+    } catch (err: any) {
       console.error('[StrategyDetail] Stop error:', err)
+      // Force status update even if the API call fails — the strategy is likely already errored/stopped
+      setStrategy((prev) => (prev ? { ...prev, status: 'stopped' } : prev))
     }
   }
 

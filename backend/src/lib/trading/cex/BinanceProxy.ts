@@ -51,13 +51,26 @@ export interface BinanceOrderParams {
 
 // --- Binance Proxy Class ---
 
+export interface BinanceProxyOptions {
+  testnet?: boolean
+  apiKey?: string
+  apiSecret?: string
+}
+
 export class BinanceProxy {
-  private readonly baseUrl = 'https://api.binance.com'
+  private readonly baseUrl: string
   private client: AxiosInstance
   private strategyId: string
+  private injectedApiKey?: string
+  private injectedApiSecret?: string
+  private accountId?: string
 
-  constructor(strategyId: string = 'binance-spot') {
+  constructor(strategyId: string = 'binance-spot', options?: BinanceProxyOptions, accountId?: string) {
     this.strategyId = strategyId
+    this.accountId = accountId
+    this.baseUrl = options?.testnet ? 'https://testnet.binance.vision' : 'https://api.binance.com'
+    this.injectedApiKey = options?.apiKey
+    this.injectedApiSecret = options?.apiSecret
     this.client = axios.create({
       baseURL: this.baseUrl,
       timeout: 10000,
@@ -222,11 +235,12 @@ export class BinanceProxy {
 
   /**
    * Record a completed trade in the PnlEngine and OrderManager.
+   * Records BOTH sides of the trade (sell token_in + buy token_out).
    */
   private recordTrade(result: BinanceOrderResult, side: 'BUY' | 'SELL'): void {
     try {
-      // Extract base asset symbol from the trading pair (e.g., ETHUSDT -> ETH)
       const baseAsset = this.extractBaseAsset(result.symbol)
+      const quoteAsset = this.extractQuoteAsset(result.symbol)
 
       // Calculate total fees
       const totalFees = result.fills.reduce((sum, fill) => {
@@ -238,40 +252,120 @@ export class BinanceProxy {
       const totalQuoteQty = parseFloat(result.cummulativeQuoteQty)
       const avgPrice = totalQty > 0 ? totalQuoteQty / totalQty : 0
 
-      // Record in OrderManager
-      const order = orderManager.recordOrder({
+      // Derive token in/out from side
+      const tokenInSymbol = side === 'BUY' ? quoteAsset : baseAsset
+      const tokenInAmount = side === 'BUY' ? result.cummulativeQuoteQty : result.executedQty
+      const tokenOutSymbol = side === 'BUY' ? baseAsset : quoteAsset
+      const tokenOutAmount = side === 'BUY' ? result.executedQty : result.cummulativeQuoteQty
+
+      const txHash = result.orderId.toString()
+      const orderType = result.type.toLowerCase() as 'market' | 'limit'
+
+      // --- Record BOTH sides in OrderManager ---
+      const inAmt = parseFloat(tokenInAmount)
+      const outAmt = parseFloat(tokenOutAmount)
+      const sellPrice = outAmt > 0 && inAmt > 0 ? (outAmt / inAmt).toString() : '0'
+      const buyPrice = inAmt > 0 && outAmt > 0 ? (inAmt / outAmt).toString() : '0'
+
+      // Order 1: SELL token_in (what we gave up) — fees attributed here
+      const sellOrder = orderManager.recordOrder({
         strategyId: this.strategyId,
-        orderType: result.type.toLowerCase() as 'market' | 'limit',
-        side: side.toLowerCase() as 'buy' | 'sell',
-        assetSymbol: baseAsset,
+        orderType,
+        side: 'sell',
+        assetSymbol: tokenInSymbol,
         protocol: 'binance',
-        quantity: result.executedQty,
-        price: avgPrice.toString()
+        quantity: tokenInAmount,
+        price: sellPrice,
+        commission: totalFees.toString(),
+        commissionAsset: result.fills[0]?.commissionAsset || undefined,
+        tokenInSymbol,
+        tokenInAmount,
+        tokenOutSymbol,
+        tokenOutAmount,
+        accountId: this.accountId
+      })
+      orderManager.updateOrderStatus(sellOrder.id, 'filled', {
+        filledQuantity: tokenInAmount,
+        filledPrice: sellPrice,
+        txHash
       })
 
-      // Update order to filled status
-      orderManager.updateOrderStatus(order.id, 'filled', {
-        filledQuantity: result.executedQty,
-        filledPrice: avgPrice.toString(),
-        txHash: result.orderId.toString()
+      // Order 2: BUY token_out (what we received) — no fees, linked to sell
+      const buyOrder = orderManager.recordOrder({
+        strategyId: this.strategyId,
+        orderType,
+        side: 'buy',
+        assetSymbol: tokenOutSymbol,
+        protocol: 'binance',
+        quantity: tokenOutAmount,
+        price: buyPrice,
+        tokenInSymbol,
+        tokenInAmount,
+        tokenOutSymbol,
+        tokenOutAmount,
+        accountId: this.accountId,
+        linkedOrderId: sellOrder.id
+      })
+      orderManager.updateOrderStatus(buyOrder.id, 'filled', {
+        filledQuantity: tokenOutAmount,
+        filledPrice: buyPrice,
+        txHash
       })
 
-      // Process in PnlEngine
-      if (totalQty > 0) {
-        pnlEngine.processTrade({
-          tradeId: result.orderId,
-          strategyId: this.strategyId,
-          side: side.toLowerCase() as 'buy' | 'sell',
-          assetSymbol: baseAsset,
-          quantity: result.executedQty,
-          price: avgPrice.toString(),
-          fees: totalFees.toString(),
-          timestamp: new Date(result.transactTime).toISOString()
-        })
-      }
+      // Back-link sell → buy
+      orderManager.setLinkedOrderId(sellOrder.id, buyOrder.id)
 
       console.log(
-        `[BinanceProxy] Trade recorded: ${side} ${result.executedQty} ${baseAsset} @ ${avgPrice.toFixed(4)} (fees: ${totalFees.toFixed(6)})`
+        `[BinanceProxy] Swap orders: SELL ${tokenInAmount} ${tokenInSymbol} (${sellOrder.id}) ↔ BUY ${tokenOutAmount} ${tokenOutSymbol} (${buyOrder.id})`
+      )
+
+      // --- Process BOTH sides in PnlEngine ---
+      // DeFi model: track positions for both tokens, snapshotter values in USD
+      const timestamp = new Date(result.transactTime).toISOString()
+      const tradeIdBase = result.orderId.toString()
+
+      const stablecoins = ['USDC', 'USDT', 'DAI', 'BUSD', 'TUSD', 'FDUSD']
+      const tokenInIsStable = stablecoins.includes(tokenInSymbol.toUpperCase())
+      const tokenOutIsStable = stablecoins.includes(tokenOutSymbol.toUpperCase())
+
+      // Compute USD prices
+      const pnlInAmt = parseFloat(tokenInAmount)
+      const pnlOutAmt = parseFloat(tokenOutAmount)
+      const tokenInPriceUsd = tokenInIsStable ? '1' : (tokenOutIsStable && pnlInAmt > 0 ? (pnlOutAmt / pnlInAmt).toString() : avgPrice.toString())
+      const tokenOutPriceUsd = tokenOutIsStable ? '1' : (tokenInIsStable && pnlOutAmt > 0 ? (pnlInAmt / pnlOutAmt).toString() : (1 / avgPrice).toString())
+
+      // Side 1: SELL token_in — fees attributed here
+      const sellPnl = pnlEngine.processTrade({
+        tradeId: `${tradeIdBase}-sell`,
+        strategyId: this.strategyId,
+        side: 'sell',
+        assetSymbol: tokenInSymbol,
+        quantity: tokenInAmount,
+        price: tokenInPriceUsd,
+        fees: totalFees.toString(),
+        timestamp,
+        accountId: this.accountId,
+        quoteAssetSymbol: tokenOutSymbol,
+        protocol: 'binance'
+      })
+
+      // Side 2: BUY token_out — no fees
+      const buyPnl = pnlEngine.processTrade({
+        tradeId: `${tradeIdBase}-buy`,
+        strategyId: this.strategyId,
+        side: 'buy',
+        assetSymbol: tokenOutSymbol,
+        quantity: tokenOutAmount,
+        price: tokenOutPriceUsd,
+        fees: '0',
+        timestamp,
+        accountId: this.accountId,
+        quoteAssetSymbol: tokenInSymbol,
+        protocol: 'binance'
+      })
+
+      console.log(
+        `[BinanceProxy] PnL: SELL ${tokenInAmount} ${tokenInSymbol} (${sellPnl.action}) + BUY ${tokenOutAmount} ${tokenOutSymbol} (${buyPnl.action})`
       )
     } catch (error: any) {
       console.error('[BinanceProxy] Failed to record trade:', error.message)
@@ -293,11 +387,26 @@ export class BinanceProxy {
   }
 
   /**
+   * Extract the quote asset from a Binance trading pair symbol.
+   * Examples: ETHUSDT -> USDT, BTCUSDC -> USDC
+   */
+  private extractQuoteAsset(symbol: string): string {
+    const quoteAssets = ['USDT', 'USDC', 'BUSD', 'TUSD', 'FDUSD', 'BTC', 'ETH', 'BNB']
+    for (const quote of quoteAssets) {
+      if (symbol.endsWith(quote)) {
+        return quote
+      }
+    }
+    return 'USDT'
+  }
+
+  /**
    * Get Binance API credentials from the api-key-store.
    */
   private getCredentials(): { apiKey: string; apiSecret: string } {
-    const apiKey = apiKeyStore.getBinanceApiKey()
-    const apiSecret = apiKeyStore.getBinanceApiSecret()
+    // Use injected credentials first (from DeltaTrade), fall back to api-key-store
+    const apiKey = this.injectedApiKey || apiKeyStore.getBinanceApiKey()
+    const apiSecret = this.injectedApiSecret || apiKeyStore.getBinanceApiSecret()
 
     if (!apiKey || !apiSecret) {
       throw new Error(
@@ -321,6 +430,6 @@ export class BinanceProxy {
 }
 
 // Factory function for convenience
-export function createBinanceProxy(strategyId?: string): BinanceProxy {
-  return new BinanceProxy(strategyId)
+export function createBinanceProxy(strategyId?: string, options?: BinanceProxyOptions): BinanceProxy {
+  return new BinanceProxy(strategyId, options)
 }

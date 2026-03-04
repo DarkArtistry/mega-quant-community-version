@@ -35,13 +35,10 @@ export interface RunnerStatus {
 }
 
 export interface RunnerOptions {
-  /** Execution timeout in milliseconds. Default: 5 minutes */
-  timeoutMs?: number
   /** Maximum number of log entries to retain in the buffer */
   maxLogEntries?: number
 }
 
-const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes
 const DEFAULT_MAX_LOG_ENTRIES = 2000
 
 // ============================================================
@@ -63,9 +60,16 @@ export class StrategyRunner {
   private pauseResolve: (() => void) | null = null
   private isPaused = false
 
-  private readonly timeoutMs: number
+  private initStartedAt: number = 0 // timestamp when init started, for stuck detection
   private readonly maxLogEntries: number
   private logInsertStmt: any = null
+  private logInsertMany: any = null
+
+  // Batched log writes
+  private logBuffer: Array<{ level: string; message: string; timestamp: string }> = []
+  private logFlushTimer: ReturnType<typeof setTimeout> | null = null
+  private static readonly LOG_BATCH_SIZE = 50
+  private static readonly LOG_FLUSH_INTERVAL_MS = 500
 
   // Track sandbox timers for cleanup
   private sandboxTimers: Set<ReturnType<typeof setTimeout>> = new Set()
@@ -74,7 +78,6 @@ export class StrategyRunner {
   constructor(strategyId: string, options?: RunnerOptions) {
     this.strategyId = strategyId
     this.runId = `run-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`
-    this.timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS
     this.maxLogEntries = options?.maxLogEntries ?? DEFAULT_MAX_LOG_ENTRIES
 
     // Prepare log insert statement for persistent storage
@@ -83,6 +86,11 @@ export class StrategyRunner {
       this.logInsertStmt = db.prepare(
         'INSERT INTO strategy_logs (strategy_id, run_id, level, message, timestamp) VALUES (?, ?, ?, ?, ?)'
       )
+      this.logInsertMany = db.transaction((entries: Array<{ level: string; message: string; timestamp: string }>) => {
+        for (const entry of entries) {
+          this.logInsertStmt.run(this.strategyId, this.runId, entry.level, entry.message, entry.timestamp)
+        }
+      })
     } catch {
       // Table may not exist yet, will fall back to in-memory only
     }
@@ -96,6 +104,8 @@ export class StrategyRunner {
    * Start executing the strategy.
    * Loads strategy code from the database, creates a DeltaTrade instance,
    * and runs the code inside a vm sandbox.
+   *
+   * Returns immediately — initialization and execution happen in background.
    */
   async start(): Promise<void> {
     if (this.state === 'running' || this.state === 'initializing') {
@@ -104,6 +114,7 @@ export class StrategyRunner {
 
     // Reset state for a fresh run
     this.state = 'initializing'
+    this.initStartedAt = Date.now()
     this.logs = []
     this.errorMessage = null
     this.stoppedAt = null
@@ -114,15 +125,33 @@ export class StrategyRunner {
 
     this.pushLog('info', `Initializing strategy runner for ${this.strategyId}`)
 
+    // Validate code synchronously before going async
+    let code: string
+    let executionType: string
     try {
-      // 1. Load strategy code from database
-      const code = this.loadStrategyCode()
+      code = this.loadStrategyCode()
       this.pushLog('info', 'Strategy code loaded from database')
+      executionType = this.loadExecutionType()
+    } catch (err: any) {
+      this.state = 'error'
+      this.errorMessage = err.message
+      this.stoppedAt = new Date().toISOString()
+      this.pushLog('error', `Failed to initialize: ${err.message}`)
+      throw err
+    }
 
-      // 2. Load execution type from database
-      const executionType = this.loadExecutionType()
+    // Run initialization + execution in background so start() returns immediately.
+    // The frontend polls /status to track progress.
+    this.executionPromise = this.initAndExecute(code, executionType)
+  }
 
-      // 3. Try to create DeltaTrade instance (optional — scripts can run without accounts)
+  /**
+   * Background init + execution. Sets state to 'running' once DeltaTrade is ready,
+   * then runs the user's strategy code.
+   */
+  private async initAndExecute(code: string, executionType: string): Promise<void> {
+    try {
+      // Create DeltaTrade (optional — scripts can run without accounts)
       try {
         this.pushLog('info', 'Creating DeltaTrade instance...')
         this.deltaTrade = await createDeltaTrade(executionType, this.strategyId)
@@ -133,44 +162,45 @@ export class StrategyRunner {
         this.deltaTrade = null
       }
 
-      // 4. Transition to running and execute
+      // If stop was requested during initialization, bail out
+      if (this.abortController?.signal.aborted || this.state === 'stopping' || this.state === 'stopped') {
+        if (this.state !== 'stopped') {
+          this.state = 'stopped'
+          this.stoppedAt = new Date().toISOString()
+        }
+        this.pushLog('info', 'Strategy stopped during initialization')
+        return
+      }
+
+      // Transition to running
       this.state = 'running'
       this.pushLog('info', 'Strategy execution started')
 
-      // Run execution in background so start() returns immediately
-      this.executionPromise = this.executeStrategy(code)
-        .then(() => {
-          if (this.state === 'running' || this.state === 'paused') {
-            this.state = 'stopped'
-            this.stoppedAt = new Date().toISOString()
-            this.pushLog('info', 'Strategy execution completed successfully')
-          }
-        })
-        .catch((err: Error) => {
-          if (this.state !== 'stopping' && this.state !== 'stopped') {
-            this.state = 'error'
-            this.errorMessage = err.message
-            this.stoppedAt = new Date().toISOString()
-            this.pushLog('error', `Strategy execution failed: ${err.message}`)
-            if (err.stack) {
-              this.pushLog('error', err.stack)
-            }
-          }
-        })
-        .finally(async () => {
-          await this.closeDeltaTrade()
-          // Persist final status to DB so frontend can pick it up
-          this.updateStrategyStatusInDb()
-        })
-    } catch (err: any) {
-      this.state = 'error'
-      this.errorMessage = err.message
-      this.stoppedAt = new Date().toISOString()
-      this.pushLog('error', `Failed to initialize: ${err.message}`)
-      if (err.stack) {
-        this.pushLog('error', err.stack)
+      // Execute the user's strategy code
+      await this.executeStrategy(code)
+
+      if (this.state === 'running' || this.state === 'paused') {
+        this.state = 'stopped'
+        this.stoppedAt = new Date().toISOString()
+        this.pushLog('info', 'Strategy execution completed successfully')
       }
-      throw err
+    } catch (err: any) {
+      if (this.state !== 'stopping' && this.state !== 'stopped') {
+        this.state = 'error'
+        this.errorMessage = err.message
+        this.stoppedAt = new Date().toISOString()
+        this.pushLog('error', `Strategy execution failed: ${err.message}`)
+        if (err.stack) {
+          this.pushLog('error', err.stack)
+        }
+      }
+    } finally {
+      // Flush any remaining buffered logs before shutdown
+      this.flushLogBuffer()
+      // Update DB FIRST so frontend polling picks up the correct status immediately,
+      // even if closeDeltaTrade hangs on slow RPCs.
+      this.updateStrategyStatusInDb()
+      await this.closeDeltaTrade()
     }
   }
 
@@ -196,6 +226,7 @@ export class StrategyRunner {
 
     this.state = 'stopping'
     this.pushLog('info', 'Stopping strategy execution...')
+    this.flushLogBuffer()
 
     // If paused, resume so the execution can terminate
     if (this.isPaused && this.pauseResolve) {
@@ -453,25 +484,19 @@ export class StrategyRunner {
         filename: `strategy-${this.strategyId}.js`
       })
 
-      // Run the script with timeout protection
+      // Run the script — no timeout so strategies can run indefinitely.
+      // Stopping is handled via AbortController (sleep/checkPause reject on abort).
       const resultPromise = script.runInContext(context, {
-        timeout: this.timeoutMs,
         breakOnSigint: true
       }) as Promise<void>
 
       // The script returns a promise (async IIFE), so we await it
       await resultPromise
     } catch (err: any) {
-      // Distinguish between abort, timeout, and other errors
+      // Distinguish between abort and other errors
       if (abortSignal.aborted) {
         this.pushLog('info', 'Execution aborted by stop request')
         return
-      }
-
-      if (err.message?.includes('Script execution timed out')) {
-        throw new Error(
-          `Strategy execution timed out after ${this.timeoutMs / 1000} seconds`
-        )
       }
 
       throw err
@@ -484,7 +509,11 @@ export class StrategyRunner {
   private async closeDeltaTrade(): Promise<void> {
     if (this.deltaTrade) {
       try {
-        await this.deltaTrade.close()
+        // Timeout close() so slow RPCs don't hang cleanup forever
+        await Promise.race([
+          this.deltaTrade.close(),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('DeltaTrade close timed out')), 15_000))
+        ])
         this.pushLog('info', 'DeltaTrade instance closed')
       } catch (err: any) {
         this.pushLog('warn', `Error closing DeltaTrade: ${err.message}`)
@@ -518,7 +547,7 @@ export class StrategyRunner {
   }
 
   /**
-   * Push a log entry to the buffer.
+   * Push a log entry to the buffer. DB writes are batched for performance.
    */
   private pushLog(level: LogEntry['level'], message: string): void {
     const timestamp = new Date().toISOString()
@@ -530,9 +559,36 @@ export class StrategyRunner {
       this.logs = this.logs.slice(-this.maxLogEntries)
     }
 
-    // Persist to database
+    // Buffer for batched DB write
+    this.logBuffer.push({ level, message, timestamp })
+
+    if (this.logBuffer.length >= StrategyRunner.LOG_BATCH_SIZE) {
+      this.flushLogBuffer()
+    } else if (!this.logFlushTimer) {
+      this.logFlushTimer = setTimeout(() => this.flushLogBuffer(), StrategyRunner.LOG_FLUSH_INTERVAL_MS)
+    }
+  }
+
+  /**
+   * Flush buffered log entries to the database in a single transaction.
+   */
+  private flushLogBuffer(): void {
+    if (this.logFlushTimer) {
+      clearTimeout(this.logFlushTimer)
+      this.logFlushTimer = null
+    }
+
+    if (this.logBuffer.length === 0) return
+
+    const entries = this.logBuffer.splice(0)
     try {
-      this.logInsertStmt?.run(this.strategyId, this.runId, level, message, timestamp)
+      if (this.logInsertMany) {
+        this.logInsertMany(entries)
+      } else if (this.logInsertStmt) {
+        for (const e of entries) {
+          this.logInsertStmt.run(this.strategyId, this.runId, e.level, e.message, e.timestamp)
+        }
+      }
     } catch {
       // Ignore DB errors in hot path
     }
@@ -554,9 +610,16 @@ class StrategyRunnerManager {
   getOrCreateRunner(strategyId: string, options?: RunnerOptions): StrategyRunner {
     const existing = this.runners.get(strategyId)
     if (existing) {
-      const state = existing.getStatus().state
-      if (state === 'running' || state === 'paused' || state === 'initializing' || state === 'stopping') {
+      const status = existing.getStatus()
+      const state = status.state
+      // Allow replacing runners stuck in 'initializing' for >60s
+      const isStuckInit = state === 'initializing' && existing['initStartedAt'] > 0
+        && (Date.now() - existing['initStartedAt']) > 60_000
+      if (!isStuckInit && (state === 'running' || state === 'paused' || state === 'initializing' || state === 'stopping')) {
         return existing
+      }
+      if (isStuckInit) {
+        console.warn(`[StrategyRunnerManager] Replacing stuck initializing runner for ${strategyId}`)
       }
     }
 

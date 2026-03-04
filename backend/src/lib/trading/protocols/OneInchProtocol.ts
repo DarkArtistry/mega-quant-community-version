@@ -25,9 +25,10 @@ export class OneInchProtocol extends ProtocolProxy {
     chainId: number,
     wallet: Wallet,
     executionId: string,
-    strategyId: string
+    strategyId: string,
+    accountId?: string
   ) {
-    super(chainName, chainId, wallet, '1inch', executionId, strategyId)
+    super(chainName, chainId, wallet, '1inch', executionId, strategyId, accountId)
 
     // Get API key from in-memory store (loaded on app unlock)
     this.apiKey = apiKeyStore.getOneInchApiKey() || ''
@@ -269,7 +270,18 @@ export class OneInchProtocol extends ProtocolProxy {
         console.log(`[OneInch] Quote price: ${slippageData.quotePrice.toFixed(6)}, Execution price: ${slippageData.executionPrice.toFixed(6)}`)
       }
 
-      // 13. Calculate gas cost
+      // 13. Fetch block timestamp for accurate PnL time-series
+      let blockTimestamp: string | undefined
+      try {
+        const block = await this.wallet.provider!.getBlock(receipt!.blockNumber)
+        if (block) {
+          blockTimestamp = new Date(block.timestamp * 1000).toISOString()
+        }
+      } catch (error: any) {
+        console.warn('[OneInch] Could not fetch block timestamp:', error.message)
+      }
+
+      // 14. Calculate gas cost
       const gasUsed = Number(receipt!.gasUsed)
       const gasPrice = receipt!.gasPrice || 0n
       const gasCostWei = receipt!.gasUsed * gasPrice
@@ -285,7 +297,7 @@ export class OneInchProtocol extends ProtocolProxy {
         console.warn('[OneInch] Could not calculate gas cost in USD')
       }
 
-      // 14. Record trade in database with slippage data
+      // 15. Record trade in database with slippage data
       const chainConfig = getChainConfig(this.chainName)
 
       await this.recordTrade({
@@ -305,7 +317,8 @@ export class OneInchProtocol extends ProtocolProxy {
         slippage_amount: slippageData?.slippageAmount,
         slippage_percentage: slippageData?.slippagePercentage,
         quote_price: slippageData?.quotePrice,
-        execution_price: slippageData?.executionPrice
+        execution_price: slippageData?.executionPrice,
+        block_timestamp: blockTimestamp
       })
 
       // 15. Get explorer URL

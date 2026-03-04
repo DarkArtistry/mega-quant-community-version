@@ -113,6 +113,87 @@ class PriceService {
   }
 
   /**
+   * Get USD prices for multiple symbols in a single CoinMarketCap API request.
+   * CMC supports ?symbol=BTC,ETH,LINK,... in one call.
+   */
+  async getBatchPricesUSD(symbols: string[]): Promise<Record<string, number>> {
+    const result: Record<string, number> = {}
+    if (!this.cmcApiKey || symbols.length === 0) return result
+
+    // Dedup and map to CMC symbols, check cache first
+    const uncachedCmcSymbols: string[] = []
+    const cmcToOriginal: Map<string, string[]> = new Map()
+
+    for (const symbol of symbols) {
+      const upper = symbol.toUpperCase()
+      const cached = this.cache.get(upper)
+      if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
+        result[upper] = cached.priceUsd
+        continue
+      }
+
+      const cmcSymbol = this.getCoinMarketCapSymbol(upper)
+      if (!cmcToOriginal.has(cmcSymbol)) {
+        cmcToOriginal.set(cmcSymbol, [])
+        uncachedCmcSymbols.push(cmcSymbol)
+      }
+      cmcToOriginal.get(cmcSymbol)!.push(upper)
+    }
+
+    if (uncachedCmcSymbols.length === 0) return result
+
+    try {
+      const response = await axios.get(
+        'https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest',
+        {
+          headers: {
+            'X-CMC_PRO_API_KEY': this.cmcApiKey,
+            'Accept': 'application/json'
+          },
+          params: {
+            symbol: uncachedCmcSymbols.join(','),
+            convert: 'USD'
+          },
+          timeout: 10000
+        }
+      )
+
+      const data = response.data?.data
+      if (data) {
+        for (const cmcSymbol of uncachedCmcSymbols) {
+          // CMC may return an array when there are multiple tokens with the same symbol
+          const entry = data[cmcSymbol]
+          const priceUsd = Array.isArray(entry)
+            ? entry[0]?.quote?.USD?.price ?? 0
+            : entry?.quote?.USD?.price ?? 0
+
+          const originals = cmcToOriginal.get(cmcSymbol) || []
+          for (const orig of originals) {
+            result[orig] = priceUsd
+            if (priceUsd > 0) {
+              this.cache.set(orig, { symbol: orig, priceUsd, timestamp: Date.now() })
+            }
+          }
+        }
+      }
+    } catch (error: any) {
+      console.warn(`[PriceService] Batch CMC fetch failed:`, error.message)
+      // Fall back to cached/fallback for uncached symbols
+      for (const cmcSymbol of uncachedCmcSymbols) {
+        const originals = cmcToOriginal.get(cmcSymbol) || []
+        for (const orig of originals) {
+          if (!(orig in result)) {
+            const stale = this.cache.get(orig)
+            result[orig] = stale?.priceUsd ?? this.getFallbackPrice(orig)
+          }
+        }
+      }
+    }
+
+    return result
+  }
+
+  /**
    * Map token symbols to CoinMarketCap symbols.
    * Wrapped tokens trade at the same price as their underlying asset.
    */

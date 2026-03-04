@@ -8,6 +8,7 @@
 import { getDatabase } from '../../../db/index.js'
 import { v4 as uuidv4 } from 'uuid'
 import { pnlEngine } from './PnlEngine.js'
+import { priceService } from '../services/PriceService.js'
 
 export class PnlSnapshotter {
   private intervalHandle: ReturnType<typeof setInterval> | null = null
@@ -53,8 +54,23 @@ export class PnlSnapshotter {
 
   /**
    * Take snapshots at all levels: global, per-strategy, per-account.
+   * Refreshes unrealized PnL from current market prices before snapshotting.
    */
-  takeAllSnapshots(): void {
+  async takeAllSnapshots(): Promise<void> {
+    // 0. Refresh unrealized PnL with current prices
+    try {
+      const openPositions = pnlEngine.getPositions(undefined, 'open')
+      const symbols = [...new Set(openPositions.map(p => p.assetSymbol))]
+
+      if (symbols.length > 0) {
+        const priceMap = await priceService.getMultiplePricesUSD(symbols)
+        pnlEngine.updateUnrealizedPnl(priceMap)
+        console.log(`[PnlSnapshotter] Refreshed unrealized PnL for ${symbols.length} assets`)
+      }
+    } catch (error: any) {
+      console.warn('[PnlSnapshotter] Failed to refresh unrealized PnL:', error.message)
+    }
+
     // 1. Global snapshot (all accounts, all strategies)
     this.takeSnapshot()
 

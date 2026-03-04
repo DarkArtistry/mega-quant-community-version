@@ -420,4 +420,84 @@ router.delete('/:walletId', (req, res) => {
   }
 })
 
+/**
+ * Export private key for an account (requires password)
+ */
+router.post('/export-private-key', async (req, res) => {
+  try {
+    const { password, accountId } = req.body
+
+    if (!password || !accountId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Password and accountId are required'
+      })
+    }
+
+    const db = getDatabase()
+
+    // Get account with encrypted private key
+    const account = db.prepare(`
+      SELECT id, name, address, private_key_encrypted, private_key_iv, private_key_tag
+      FROM accounts
+      WHERE id = ?
+    `).get(accountId) as {
+      id: string
+      name: string
+      address: string
+      private_key_encrypted: string
+      private_key_iv: string
+      private_key_tag: string
+    } | undefined
+
+    if (!account) {
+      return res.status(404).json({
+        success: false,
+        error: 'Account not found'
+      })
+    }
+
+    // Get key salt
+    const security = db.prepare(`
+      SELECT key_salt FROM app_security WHERE id = 1
+    `).get() as { key_salt: string } | undefined
+
+    if (!security) {
+      return res.status(400).json({
+        success: false,
+        error: 'App security not initialized'
+      })
+    }
+
+    // Derive encryption key and decrypt
+    const encryptionKey = deriveKey(password, security.key_salt)
+
+    let privateKey: string
+    try {
+      privateKey = decrypt(
+        account.private_key_encrypted,
+        encryptionKey,
+        account.private_key_iv,
+        account.private_key_tag
+      )
+    } catch {
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid password'
+      })
+    }
+
+    res.json({
+      success: true,
+      privateKey
+    })
+  } catch (error: any) {
+    console.error('Error exporting private key:', error)
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to export private key'
+    })
+  }
+})
+
 export default router

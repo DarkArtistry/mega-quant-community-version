@@ -2,7 +2,7 @@
 // Ported from reference with slippage tracking, PnL integration,
 // limit order support via MegaQuantRouter, and volatility fee reading
 
-import { Contract, parseUnits, formatUnits, MaxUint256, AbiCoder, ZeroAddress, solidityPacked } from 'ethers'
+import { Contract, parseUnits, formatUnits, MaxUint256, AbiCoder, ZeroAddress, solidityPacked, keccak256 } from 'ethers'
 import { ProtocolProxy, SwapParams, SwapResult, QuoteParams, QuoteResult } from '../ProtocolProxy.js'
 import { UNISWAP_V4_POOL_MANAGER_ABI } from '../abis/uniswapV4PoolManager.js'
 import { UNISWAP_V4_STATE_VIEW_ABI } from '../abis/uniswapV4StateView.js'
@@ -49,72 +49,118 @@ export interface LimitOrderResult {
   deadline: number
 }
 
-// MegaQuantRouter ABI (limit order functions)
+export interface BatchSwapLeg {
+  tokenIn: string
+  tokenOut: string
+  amountIn: string
+  fee?: number
+  tickSpacing?: number
+  hookAddress?: string
+  hookData?: string
+}
+
+export interface BatchSwapResult {
+  amountIn: string
+  tokenIn: string
+  tokenOut: string
+  success: boolean
+}
+
+// Pool key tuple component used across ABIs
+const POOL_KEY_COMPONENTS = [
+  { name: 'currency0', type: 'address' },
+  { name: 'currency1', type: 'address' },
+  { name: 'fee', type: 'uint24' },
+  { name: 'tickSpacing', type: 'int24' },
+  { name: 'hooks', type: 'address' }
+] as const
+
+const POOL_KEY_TUPLE = {
+  components: POOL_KEY_COMPONENTS,
+  name: 'key',
+  type: 'tuple'
+} as const
+
+const SWAP_PARAMS_TUPLE = {
+  components: [
+    { name: 'zeroForOne', type: 'bool' },
+    { name: 'amountSpecified', type: 'int256' },
+    { name: 'sqrtPriceLimitX96', type: 'uint160' }
+  ],
+  name: 'params',
+  type: 'tuple'
+} as const
+
+// MegaQuantRouter ABI — matches MegaQuantRouter.sol
 const MEGA_QUANT_ROUTER_ABI = [
   {
     inputs: [
-      {
-        components: [
-          { name: 'currency0', type: 'address' },
-          { name: 'currency1', type: 'address' },
-          { name: 'fee', type: 'uint24' },
-          { name: 'tickSpacing', type: 'int24' },
-          { name: 'hooks', type: 'address' }
-        ],
-        name: 'key',
-        type: 'tuple'
-      },
-      { name: 'tickLower', type: 'int24' },
+      POOL_KEY_TUPLE,
+      { name: 'tick', type: 'int24' },
+      { name: 'amountIn', type: 'uint256' },
       { name: 'zeroForOne', type: 'bool' },
-      { name: 'amountIn', type: 'uint256' }
+      { name: 'deadline', type: 'uint64' },
+      { name: 'hookData', type: 'bytes' }
     ],
     name: 'placeLimitOrder',
-    outputs: [{ name: 'orderId', type: 'bytes32' }],
+    outputs: [{ name: '', type: 'int24' }],
     stateMutability: 'nonpayable',
     type: 'function'
   },
   {
     inputs: [
-      {
-        components: [
-          { name: 'currency0', type: 'address' },
-          { name: 'currency1', type: 'address' },
-          { name: 'fee', type: 'uint24' },
-          { name: 'tickSpacing', type: 'int24' },
-          { name: 'hooks', type: 'address' }
-        ],
-        name: 'key',
-        type: 'tuple'
-      },
-      { name: 'tickLower', type: 'int24' },
-      { name: 'zeroForOne', type: 'bool' }
+      { components: POOL_KEY_COMPONENTS, name: 'keys', type: 'tuple[]' },
+      { components: SWAP_PARAMS_TUPLE.components, name: 'paramsArray', type: 'tuple[]' },
+      { name: 'hookDataArray', type: 'bytes[]' }
     ],
-    name: 'cancelLimitOrder',
-    outputs: [],
-    stateMutability: 'nonpayable',
+    name: 'batchSwap',
+    outputs: [{ name: 'deltas', type: 'int256[]' }],
+    stateMutability: 'payable',
     type: 'function'
   }
 ] as const
 
-// MegaQuantHook ABI (volatility fee reading)
+// MegaQuantHook ABI — matches MegaQuantHook.sol
 const MEGA_QUANT_HOOK_ABI = [
   {
-    inputs: [
-      {
-        components: [
-          { name: 'currency0', type: 'address' },
-          { name: 'currency1', type: 'address' },
-          { name: 'fee', type: 'uint24' },
-          { name: 'tickSpacing', type: 'int24' },
-          { name: 'hooks', type: 'address' }
-        ],
-        name: 'key',
-        type: 'tuple'
-      }
-    ],
-    name: 'getVolatilityFee',
-    outputs: [{ name: 'fee', type: 'uint24' }],
+    inputs: [{ name: 'poolId', type: 'bytes32' }],
+    name: 'getPoolFee',
+    outputs: [{ name: '', type: 'uint24' }],
     stateMutability: 'view',
+    type: 'function'
+  },
+  {
+    inputs: [
+      POOL_KEY_TUPLE,
+      { name: 'tickToSellAt', type: 'int24' },
+      { name: 'zeroForOne', type: 'bool' }
+    ],
+    name: 'cancelOrder',
+    outputs: [],
+    stateMutability: 'nonpayable',
+    type: 'function'
+  },
+  {
+    inputs: [
+      POOL_KEY_TUPLE,
+      { name: 'tickToSellAt', type: 'int24' },
+      { name: 'zeroForOne', type: 'bool' },
+      { name: 'inputAmountToClaimFor', type: 'uint256' }
+    ],
+    name: 'redeem',
+    outputs: [],
+    stateMutability: 'nonpayable',
+    type: 'function'
+  },
+  {
+    inputs: [
+      POOL_KEY_TUPLE,
+      { name: 'tick', type: 'int24' },
+      { name: 'zeroForOne', type: 'bool' }
+    ],
+    name: 'getOrderId',
+    outputs: [{ name: '', type: 'uint256' }],
+    stateMutability: 'pure',
     type: 'function'
   }
 ] as const
@@ -141,9 +187,10 @@ export class UniswapV4Protocol extends ProtocolProxy {
     chainId: number,
     wallet: Wallet,
     executionId: string,
-    strategyId: string
+    strategyId: string,
+    accountId?: string
   ) {
-    super(chainName, chainId, wallet, 'uniswap-v4', executionId, strategyId)
+    super(chainName, chainId, wallet, 'uniswap-v4', executionId, strategyId, accountId)
 
     const chainConfig = getChainConfig(chainName)
     if (!chainConfig.uniswapV4) {
@@ -350,7 +397,18 @@ export class UniswapV4Protocol extends ProtocolProxy {
 
       console.log(`[UniswapV4] Transaction confirmed in block ${blockNumber}`)
 
-      // 13. Calculate gas cost
+      // 13. Fetch block timestamp for accurate PnL time-series
+      let blockTimestamp: string | undefined
+      try {
+        const block = await this.wallet.provider!.getBlock(blockNumber)
+        if (block) {
+          blockTimestamp = new Date(block.timestamp * 1000).toISOString()
+        }
+      } catch (error: any) {
+        console.warn('[UniswapV4] Could not fetch block timestamp:', error.message)
+      }
+
+      // 14. Calculate gas cost
       const gasUsed = receipt.gasUsed
       gasUsedNum = Number(gasUsed)
       gasPrice = receipt.gasPrice || tx.gasPrice || 0n
@@ -396,7 +454,7 @@ export class UniswapV4Protocol extends ProtocolProxy {
       // 16. Calculate gas price in Gwei
       const gasPriceGwei = formatUnits(gasPrice, 'gwei')
 
-      // 17. Record trade with slippage data
+      // 18. Record trade with slippage data
       await this.recordTrade({
         tx_hash: txHash,
         block_number: blockNumber,
@@ -414,7 +472,8 @@ export class UniswapV4Protocol extends ProtocolProxy {
         slippage_amount: slippageData.slippageAmount,
         slippage_percentage: slippageData.slippagePercentage,
         quote_price: slippageData.quotePrice,
-        execution_price: slippageData.executionPrice
+        execution_price: slippageData.executionPrice,
+        block_timestamp: blockTimestamp
       })
 
       // Build explorer URL
@@ -639,12 +698,17 @@ export class UniswapV4Protocol extends ProtocolProxy {
         this.wallet
       )
 
-      // Place limit order
+      // Place limit order — parameter order matches MegaQuantRouter.placeLimitOrder
+      const deadlineSeconds = params.deadline || 86400 // Default 24 hours
+      const deadlineTimestamp = Math.floor(Date.now() / 1000) + deadlineSeconds
+
       const tx = await megaQuantRouter.placeLimitOrder(
         [poolKey.currency0, poolKey.currency1, poolKey.fee, poolKey.tickSpacing, poolKey.hooks],
         params.tick,
+        amountIn,
         zeroForOne,
-        amountIn
+        deadlineTimestamp,
+        params.hookData || '0x'
       )
 
       console.log(`[UniswapV4] Limit order tx submitted: ${tx.hash}`)
@@ -652,24 +716,17 @@ export class UniswapV4Protocol extends ProtocolProxy {
       const receipt = await tx.wait()
       console.log(`[UniswapV4] Limit order confirmed in block ${receipt.blockNumber}`)
 
-      // Parse orderId from logs
-      let orderId = tx.hash // fallback to tx hash
-      for (const log of receipt.logs) {
-        try {
-          const parsed = megaQuantRouter.interface.parseLog({
-            topics: log.topics as string[],
-            data: log.data
-          })
-          if (parsed && parsed.args.orderId) {
-            orderId = parsed.args.orderId
-            break
-          }
-        } catch {
-          // Continue searching
-        }
-      }
-
-      const deadlineSeconds = params.deadline || 86400 // Default 24 hours
+      // The router returns the actual tick (normalized to spacing)
+      // Compute orderId deterministically: keccak256(abi.encode(poolId, tick, zeroForOne))
+      const abiCoder = AbiCoder.defaultAbiCoder()
+      const poolId = keccak256(abiCoder.encode(
+        ['address', 'address', 'uint24', 'int24', 'address'],
+        [poolKey.currency0, poolKey.currency1, poolKey.fee, poolKey.tickSpacing, poolKey.hooks]
+      ))
+      const orderId = keccak256(abiCoder.encode(
+        ['bytes32', 'int24', 'bool'],
+        [poolId, params.tick, zeroForOne]
+      ))
 
       return {
         success: true,
@@ -687,18 +744,20 @@ export class UniswapV4Protocol extends ProtocolProxy {
   }
 
   /**
-   * Cancel a pending limit order via MegaQuantRouter contract.
+   * Cancel a pending limit order via MegaQuantHook contract.
+   * The wallet must hold ERC1155 claim tokens for the order.
+   * Calls hook.cancelOrder directly (not the router).
    * @param tokenIn Input token symbol
    * @param tokenOut Output token symbol
    * @param tick Tick of the limit order to cancel
-   * @param megaQuantRouterAddress Address of the deployed MegaQuantRouter contract
+   * @param hookAddress Address of the MegaQuantHook contract
    * @returns Transaction hash of the cancellation
    */
   async cancelLimitOrder(
     tokenIn: string,
     tokenOut: string,
     tick: number,
-    megaQuantRouterAddress: string
+    hookAddress: string
   ): Promise<{ success: boolean; txHash: string }> {
     console.log(`[UniswapV4] Cancelling limit order at tick ${tick}`)
 
@@ -710,18 +769,19 @@ export class UniswapV4Protocol extends ProtocolProxy {
         tokenInInfo.address,
         tokenOutInfo.address,
         this.DEFAULT_FEE,
-        this.DEFAULT_TICK_SPACING
+        this.DEFAULT_TICK_SPACING,
+        hookAddress
       )
 
       const zeroForOne = this.isZeroForOne(tokenInInfo.address, tokenOutInfo.address, poolKey)
 
-      const megaQuantRouter = new Contract(
-        megaQuantRouterAddress,
-        MEGA_QUANT_ROUTER_ABI,
+      const hookContract = new Contract(
+        hookAddress,
+        MEGA_QUANT_HOOK_ABI,
         this.wallet
       )
 
-      const tx = await megaQuantRouter.cancelLimitOrder(
+      const tx = await hookContract.cancelOrder(
         [poolKey.currency0, poolKey.currency1, poolKey.fee, poolKey.tickSpacing, poolKey.hooks],
         tick,
         zeroForOne
@@ -740,7 +800,8 @@ export class UniswapV4Protocol extends ProtocolProxy {
 
   /**
    * Read the current volatility-adjusted fee from MegaQuantHook.
-   * The hook dynamically adjusts fees based on market volatility.
+   * The hook dynamically adjusts fees based on EWMA variance of tick movement.
+   * Calls hook.getPoolFee(PoolId) where PoolId = keccak256(abi.encode(key)).
    * @param tokenA First token symbol
    * @param tokenB Second token symbol
    * @param hookAddress Address of the MegaQuantHook contract
@@ -765,19 +826,20 @@ export class UniswapV4Protocol extends ProtocolProxy {
         hookAddress
       )
 
+      // Compute PoolId = keccak256(abi.encode(currency0, currency1, fee, tickSpacing, hooks))
+      const abiCoder = AbiCoder.defaultAbiCoder()
+      const poolId = keccak256(abiCoder.encode(
+        ['address', 'address', 'uint24', 'int24', 'address'],
+        [poolKey.currency0, poolKey.currency1, poolKey.fee, poolKey.tickSpacing, poolKey.hooks]
+      ))
+
       const hookContract = new Contract(
         hookAddress,
         MEGA_QUANT_HOOK_ABI,
         this.wallet.provider!
       )
 
-      const fee = await hookContract.getVolatilityFee([
-        poolKey.currency0,
-        poolKey.currency1,
-        poolKey.fee,
-        poolKey.tickSpacing,
-        poolKey.hooks
-      ])
+      const fee = await hookContract.getPoolFee(poolId)
 
       const feeNumber = Number(fee)
       const feePercentage = `${(feeNumber / 10000).toFixed(4)}%`
@@ -788,6 +850,193 @@ export class UniswapV4Protocol extends ProtocolProxy {
     } catch (error: any) {
       console.error('[UniswapV4] Failed to read volatility fee:', error)
       throw new Error(`Failed to read volatility fee: ${error.message}`)
+    }
+  }
+
+  /**
+   * Execute multiple swaps in a single transaction via MegaQuantRouter.batchSwap().
+   * All swaps share one unlock() call, saving gas through V4's flash accounting.
+   *
+   * @param swaps Array of swap descriptors
+   * @param megaQuantRouterAddress Address of the deployed MegaQuantRouter
+   * @returns Array of per-swap results
+   */
+  async batchSwap(
+    swaps: Array<{
+      tokenIn: string
+      tokenOut: string
+      amountIn: string
+      fee?: number
+      tickSpacing?: number
+      hookAddress?: string
+      hookData?: string
+    }>,
+    megaQuantRouterAddress: string
+  ): Promise<Array<{ amountIn: string; tokenIn: string; tokenOut: string; success: boolean }>> {
+    console.log(`[UniswapV4] Batch swap: ${swaps.length} swaps via MegaQuantRouter`)
+
+    if (swaps.length === 0) return []
+
+    try {
+      const abiCoder = AbiCoder.defaultAbiCoder()
+
+      // Build parallel arrays for the contract call
+      const keys: Array<[string, string, number, number, string]> = []
+      const paramsArray: Array<[boolean, bigint, bigint]> = []
+      const hookDataArray: string[] = []
+      const tokenInfos: Array<{ tokenInInfo: any; tokenOutInfo: any; amountIn: bigint }> = []
+
+      for (const s of swaps) {
+        const tokenInInfo = getTokenInfo(this.chainName, s.tokenIn)
+        const tokenOutInfo = getTokenInfo(this.chainName, s.tokenOut)
+        const amountIn = parseUnits(s.amountIn, tokenInInfo.decimals)
+
+        const poolKey = this.createCustomPoolKey(
+          tokenInInfo.address,
+          tokenOutInfo.address,
+          s.fee || this.DEFAULT_FEE,
+          s.tickSpacing || this.DEFAULT_TICK_SPACING,
+          s.hookAddress
+        )
+
+        const zeroForOne = this.isZeroForOne(tokenInInfo.address, tokenOutInfo.address, poolKey)
+
+        keys.push([poolKey.currency0, poolKey.currency1, poolKey.fee, poolKey.tickSpacing, poolKey.hooks])
+        paramsArray.push([
+          zeroForOne,
+          -amountIn,  // negative = exact input
+          zeroForOne
+            ? BigInt('4295128740')   // TickMath.MIN_SQRT_PRICE + 1
+            : BigInt('1461446703485210103287273052203988822378723970341')  // TickMath.MAX_SQRT_PRICE - 1
+        ])
+        hookDataArray.push(s.hookData || '0x')
+        tokenInfos.push({ tokenInInfo, tokenOutInfo, amountIn })
+
+        // Approve each input token for the router
+        const isNativeEth = tokenInInfo.address === '0x0000000000000000000000000000000000000000'
+        if (!isNativeEth) {
+          await this.approveTokenForAddress(tokenInInfo.address, amountIn, megaQuantRouterAddress)
+        }
+      }
+
+      const megaQuantRouter = new Contract(
+        megaQuantRouterAddress,
+        MEGA_QUANT_ROUTER_ABI,
+        this.wallet
+      )
+
+      console.log(`[UniswapV4] Executing batch swap with ${swaps.length} legs...`)
+
+      const tx = await megaQuantRouter.batchSwap(keys, paramsArray, hookDataArray)
+
+      console.log(`[UniswapV4] Batch swap tx submitted: ${tx.hash}`)
+      const receipt = await tx.wait()
+      console.log(`[UniswapV4] Batch swap confirmed in block ${receipt.blockNumber}`)
+
+      // Build results
+      const results = swaps.map((s, i) => ({
+        amountIn: s.amountIn,
+        tokenIn: s.tokenIn,
+        tokenOut: s.tokenOut,
+        success: true
+      }))
+
+      // Record each leg as a trade
+      const gasPerLeg = Math.floor(Number(receipt.gasUsed) / swaps.length)
+      const gasPrice = receipt.gasPrice || 0n
+      const gasPriceGwei = formatUnits(gasPrice, 'gwei')
+
+      let blockTimestamp: string | undefined
+      try {
+        const block = await this.wallet.provider!.getBlock(receipt.blockNumber)
+        if (block) blockTimestamp = new Date(block.timestamp * 1000).toISOString()
+      } catch { /* non-critical */ }
+
+      for (let i = 0; i < swaps.length; i++) {
+        const { tokenInInfo, tokenOutInfo, amountIn } = tokenInfos[i]
+        try {
+          await this.recordTrade({
+            tx_hash: receipt.hash,
+            block_number: receipt.blockNumber,
+            token_in_address: tokenInInfo.address,
+            token_in_symbol: tokenInInfo.symbol,
+            token_in_amount: formatUnits(amountIn, tokenInInfo.decimals),
+            token_out_address: tokenOutInfo.address,
+            token_out_symbol: tokenOutInfo.symbol,
+            token_out_amount: '0', // exact output unknown without decoding deltas
+            gas_used: gasPerLeg,
+            gas_price_gwei: gasPriceGwei,
+            block_timestamp: blockTimestamp
+          })
+        } catch (error: any) {
+          console.warn(`[UniswapV4] Failed to record batch swap leg ${i}:`, error.message)
+        }
+      }
+
+      return results
+    } catch (error: any) {
+      console.error('[UniswapV4] Batch swap failed:', error)
+      throw new Error(`Batch swap failed: ${error.message}`)
+    }
+  }
+
+  /**
+   * Redeem output tokens from a filled limit order.
+   * After a limit order executes via afterSwap, the hook holds output tokens.
+   * The user burns their ERC1155 claim tokens to receive a pro-rata share.
+   *
+   * @param tokenIn Original input token symbol (used to reconstruct pool key)
+   * @param tokenOut Original output token symbol
+   * @param tick Tick where the limit order was placed
+   * @param amount Amount of claim tokens to redeem (in input token units)
+   * @param hookAddress Address of the MegaQuantHook contract
+   * @returns Transaction hash and redeemed status
+   */
+  async redeemLimitOrder(
+    tokenIn: string,
+    tokenOut: string,
+    tick: number,
+    amount: string,
+    hookAddress: string
+  ): Promise<{ success: boolean; txHash: string }> {
+    console.log(`[UniswapV4] Redeeming limit order: ${amount} claim tokens at tick ${tick}`)
+
+    try {
+      const tokenInInfo = getTokenInfo(this.chainName, tokenIn)
+      const tokenOutInfo = getTokenInfo(this.chainName, tokenOut)
+
+      const poolKey = this.createCustomPoolKey(
+        tokenInInfo.address,
+        tokenOutInfo.address,
+        this.DEFAULT_FEE,
+        this.DEFAULT_TICK_SPACING,
+        hookAddress
+      )
+
+      const zeroForOne = this.isZeroForOne(tokenInInfo.address, tokenOutInfo.address, poolKey)
+      const inputAmountToClaimFor = parseUnits(amount, tokenInInfo.decimals)
+
+      const hookContract = new Contract(
+        hookAddress,
+        MEGA_QUANT_HOOK_ABI,
+        this.wallet
+      )
+
+      const tx = await hookContract.redeem(
+        [poolKey.currency0, poolKey.currency1, poolKey.fee, poolKey.tickSpacing, poolKey.hooks],
+        tick,
+        zeroForOne,
+        inputAmountToClaimFor
+      )
+
+      console.log(`[UniswapV4] Redeem tx submitted: ${tx.hash}`)
+      const receipt = await tx.wait()
+      console.log(`[UniswapV4] Limit order redeemed in block ${receipt.blockNumber}`)
+
+      return { success: true, txHash: tx.hash }
+    } catch (error: any) {
+      console.error('[UniswapV4] Redeem limit order failed:', error)
+      throw new Error(`Redeem limit order failed: ${error.message}`)
     }
   }
 

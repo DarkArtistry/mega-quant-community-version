@@ -190,12 +190,17 @@ router.post('/unlock', async (req, res) => {
       const binanceApiKey = decryptBinanceApiKey(password)
       const binanceApiSecret = decryptBinanceApiSecret(password)
 
+      // Read binance_testnet flag from DB (not encrypted)
+      const { getDatabase: getDb } = await import('../db/index.js')
+      const apiConfigRow = getDb().prepare('SELECT binance_testnet FROM api_configs WHERE id = 1').get() as any
+
       apiKeyStore.loadKeys({
         alchemyApiKey: alchemyApiKey || undefined,
         coinMarketCapApiKey: coinMarketCapApiKey || undefined,
         oneInchApiKey: oneInchApiKey || undefined,
         binanceApiKey: binanceApiKey || undefined,
-        binanceApiSecret: binanceApiSecret || undefined
+        binanceApiSecret: binanceApiSecret || undefined,
+        binanceTestnet: !!apiConfigRow?.binance_testnet,
       })
 
       console.log(`[Security] API keys loaded into memory`)

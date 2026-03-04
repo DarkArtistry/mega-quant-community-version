@@ -81,40 +81,53 @@ router.get('/aggregated/:base/:quote', async (req, res) => {
 
 /**
  * POST /api/prices/aggregated/batch
- * Get aggregated prices from multiple sources for multiple symbols.
- * Body: { symbols: ['ETH', 'BTC', 'USDC'] }
+ * Get aggregated prices for multiple trading pairs.
+ * Body: { pairs: [{base: 'BTC', quote: 'USD'}, ...] }
+ * Legacy: { symbols: ['ETH', 'BTC'] } — treated as USD pairs for backward compat.
  */
 router.post('/aggregated/batch', async (req, res) => {
   try {
-    const { symbols } = req.body
+    const { pairs, symbols } = req.body
 
-    if (!symbols || !Array.isArray(symbols) || symbols.length === 0) {
+    // Build normalized pair list — support both new { pairs } and legacy { symbols }
+    let pairList: Array<{ base: string; quote: string }>
+
+    if (pairs && Array.isArray(pairs) && pairs.length > 0) {
+      pairList = pairs.map((p: { base: string; quote: string }) => ({
+        base: p.base.toUpperCase(),
+        quote: (p.quote || 'USD').toUpperCase(),
+      }))
+    } else if (symbols && Array.isArray(symbols) && symbols.length > 0) {
+      // Legacy: treat each symbol as a USD pair
+      pairList = symbols.map((sym: string) => ({ base: sym.toUpperCase(), quote: 'USD' }))
+    } else {
       return res.status(400).json({
         success: false,
-        error: 'Symbols array is required'
+        error: 'Either pairs array or symbols array is required'
       })
     }
 
     const aggregator = getPriceAggregator()
 
-    const results = await Promise.allSettled(
-      symbols.map((sym: string) => aggregator.getAggregatedPrice(sym, 'USD'))
-    )
+    const batchResult = await aggregator.getBatchAggregatedPrices(pairList)
 
-    const prices: Record<string, { median: number; spread: number; sourceCount: number }> = {}
+    const prices: Record<string, { base: string; quote: string; median: number; spread: number; sourceCount: number }> = {}
 
-    symbols.forEach((sym: string, idx: number) => {
-      const result = results[idx]
-      if (result.status === 'fulfilled') {
-        prices[sym.toUpperCase()] = {
-          median: result.value.median,
-          spread: result.value.spread,
-          sourceCount: result.value.prices.length
+    for (const p of pairList) {
+      const key = `${p.base}/${p.quote}`
+      const agg = batchResult[key]
+      if (agg) {
+        prices[key] = {
+          base: p.base,
+          quote: p.quote,
+          median: agg.median,
+          spread: agg.spread,
+          sourceCount: agg.prices.length
         }
       } else {
-        prices[sym.toUpperCase()] = { median: 0, spread: 0, sourceCount: 0 }
+        prices[key] = { base: p.base, quote: p.quote, median: 0, spread: 0, sourceCount: 0 }
       }
-    })
+    }
 
     res.json({
       success: true,
@@ -123,6 +136,29 @@ router.post('/aggregated/batch', async (req, res) => {
     })
   } catch (error: any) {
     console.error('[Prices] Batch aggregated price error:', error)
+    res.status(500).json({
+      success: false,
+      error: error.message
+    })
+  }
+})
+
+/**
+ * GET /api/prices/pairs
+ * Discover all supported trading pairs.
+ */
+router.get('/pairs', async (_req, res) => {
+  try {
+    const aggregator = getPriceAggregator()
+    const pairs = aggregator.getAvailablePairs()
+
+    res.json({
+      success: true,
+      pairs,
+      count: pairs.length,
+    })
+  } catch (error: any) {
+    console.error('[Prices] Pairs discovery error:', error)
     res.status(500).json({
       success: false,
       error: error.message

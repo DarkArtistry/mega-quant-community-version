@@ -52,6 +52,62 @@ export const TOKEN_ADDRESSES: Record<string, Record<string, TokenInfo>> = {
       name: 'Dai Stablecoin',
       decimals: 18,
       coingeckoId: 'dai'
+    },
+    LINK: {
+      address: '0x514910771AF9Ca656af840dff83E8264EcF986CA',
+      symbol: 'LINK',
+      name: 'Chainlink Token',
+      decimals: 18,
+      coingeckoId: 'chainlink'
+    },
+    UNI: {
+      address: '0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984',
+      symbol: 'UNI',
+      name: 'Uniswap',
+      decimals: 18,
+      coingeckoId: 'uniswap'
+    },
+    AAVE: {
+      address: '0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9',
+      symbol: 'AAVE',
+      name: 'Aave Token',
+      decimals: 18,
+      coingeckoId: 'aave'
+    },
+    SHIB: {
+      address: '0x95aD61b0a150d79219dCF64E1E6Cc01f0B64C4cE',
+      symbol: 'SHIB',
+      name: 'Shiba Inu',
+      decimals: 18,
+      coingeckoId: 'shiba-inu'
+    },
+    MNT: {
+      address: '0x3c3a81e81dc49A522A592e7622A7E711c06bf354',
+      symbol: 'MNT',
+      name: 'Mantle',
+      decimals: 18,
+      coingeckoId: 'mantle'
+    },
+    WLD: {
+      address: '0x163f8C2467924be0ae7B5347228CABF260318753',
+      symbol: 'WLD',
+      name: 'Worldcoin',
+      decimals: 18,
+      coingeckoId: 'worldcoin-wld'
+    },
+    STETH: {
+      address: '0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84',
+      symbol: 'STETH',
+      name: 'Lido Staked Ether',
+      decimals: 18,
+      coingeckoId: 'staked-ether'
+    },
+    WSTETH: {
+      address: '0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0',
+      symbol: 'WSTETH',
+      name: 'Wrapped stETH',
+      decimals: 18,
+      coingeckoId: 'wrapped-steth'
     }
   },
 
@@ -90,6 +146,27 @@ export const TOKEN_ADDRESSES: Record<string, Record<string, TokenInfo>> = {
       name: 'Dai Stablecoin',
       decimals: 18,
       coingeckoId: 'dai'
+    },
+    WBTC: {
+      address: '0x0555E30da8f98308EdB960aa94C0Db47230d2B9c',
+      symbol: 'WBTC',
+      name: 'Wrapped BTC',
+      decimals: 8,
+      coingeckoId: 'wrapped-bitcoin'
+    },
+    LINK: {
+      address: '0x88Fb150BDc53A65fe94Dea0c9BA0a6dAf8C6e196',
+      symbol: 'LINK',
+      name: 'Chainlink Token',
+      decimals: 18,
+      coingeckoId: 'chainlink'
+    },
+    AAVE: {
+      address: '0x63706e401c06ac8513145b7687A14804d17f814b',
+      symbol: 'AAVE',
+      name: 'Aave Token',
+      decimals: 18,
+      coingeckoId: 'aave'
     }
   },
 
@@ -119,6 +196,79 @@ export const TOKEN_ADDRESSES: Record<string, Record<string, TokenInfo>> = {
       name: 'Dai Stablecoin',
       decimals: 18
     }
+  },
+
+  unichain: {
+    ETH: {
+      address: '0x0000000000000000000000000000000000000000',
+      symbol: 'ETH',
+      name: 'Ether',
+      decimals: 18,
+      coingeckoId: 'ethereum'
+    },
+    WETH: {
+      address: '0x4200000000000000000000000000000000000006',
+      symbol: 'WETH',
+      name: 'Wrapped Ether',
+      decimals: 18,
+      coingeckoId: 'weth'
+    },
+    USDC: {
+      address: '0x078D782b760474a361dDA0AF3839290b0EF57AD6',
+      symbol: 'USDC',
+      name: 'USD Coin',
+      decimals: 6,
+      coingeckoId: 'usd-coin'
+    },
+    USDT: {
+      address: '0x588CE4F028D8e7B53B687865d6A67b3A54C75518',
+      symbol: 'USDT',
+      name: 'Tether USD',
+      decimals: 6,
+      coingeckoId: 'tether'
+    },
+    UNI: {
+      address: '0x8f187aA05619a017077f5308904739877ce9eA21',
+      symbol: 'UNI',
+      name: 'Uniswap',
+      decimals: 18,
+      coingeckoId: 'uniswap'
+    },
+    WBTC: {
+      address: '0x0555E30da8f98308EdB960aa94C0Db47230d2B9c',
+      symbol: 'WBTC',
+      name: 'Wrapped BTC',
+      decimals: 8,
+      coingeckoId: 'wrapped-bitcoin'
+    },
+    LINK: {
+      address: '0xEF66491eab4bbB582c57b14778afd8dFb70D8A1A',
+      symbol: 'LINK',
+      name: 'Chainlink Token',
+      decimals: 18,
+      coingeckoId: 'chainlink'
+    },
+  },
+
+  'unichain-sepolia': {
+    WETH: {
+      address: '0x4200000000000000000000000000000000000006',
+      symbol: 'WETH',
+      name: 'Wrapped Ether',
+      decimals: 18
+    },
+    USDC: {
+      address: '0x31d0220469e10c4E71834a79b1f276d740d3768F',
+      symbol: 'USDC',
+      name: 'USD Coin',
+      decimals: 6
+    },
+    USDT: {
+      address: '0x3C5000e61F0A10acD0c826e09b90ddeF5AbFc3b5',
+      symbol: 'USDT',
+      name: 'Tether USD',
+      decimals: 6
+    },
   },
 
   'base-sepolia': {

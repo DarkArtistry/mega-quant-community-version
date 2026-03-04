@@ -68,7 +68,8 @@ router.post('/api-config/get', deriveEncryptionKey, (req, res) => {
         coinmarketcap_api_key_encrypted, coinmarketcap_api_key_iv, coinmarketcap_api_key_tag,
         oneinch_api_key_encrypted, oneinch_api_key_iv, oneinch_api_key_tag,
         binance_api_key_encrypted, binance_api_key_iv, binance_api_key_tag,
-        binance_api_secret_encrypted, binance_api_secret_iv, binance_api_secret_tag
+        binance_api_secret_encrypted, binance_api_secret_iv, binance_api_secret_tag,
+        binance_testnet
       FROM api_configs
       WHERE id = 1
     `).get() as any
@@ -80,7 +81,8 @@ router.post('/api-config/get', deriveEncryptionKey, (req, res) => {
       coinmarketcap_api_key: '',
       oneinch_api_key: '',
       binance_api_key: '',
-      binance_api_secret: ''
+      binance_api_secret: '',
+      binance_testnet: config?.binance_testnet ? true : false,
     }
 
     // Decrypt each field if it exists
@@ -189,70 +191,81 @@ router.post('/api-config/get', deriveEncryptionKey, (req, res) => {
 })
 
 // Update API configuration (encrypted)
-router.post('/api-config/update', deriveEncryptionKey, (req, res) => {
+router.post('/api-config/update', deriveEncryptionKey, async (req, res) => {
   try {
-    const { alchemyAppId, alchemyApiKey, etherscanApiKey, coinMarketCapApiKey, oneInchApiKey, binanceApiKey, binanceApiSecret } = req.body
+    const body = req.body
     const db = getDatabase()
     const encryptionKey = (req as any).encryptionKey as Buffer
 
-    // Encrypt each field
-    const alchemyAppIdEnc = alchemyAppId ? encrypt(alchemyAppId, encryptionKey) : null
-    const alchemyApiKeyEnc = alchemyApiKey ? encrypt(alchemyApiKey, encryptionKey) : null
-    const etherscanApiKeyEnc = etherscanApiKey ? encrypt(etherscanApiKey, encryptionKey) : null
-    const coinMarketCapApiKeyEnc = coinMarketCapApiKey ? encrypt(coinMarketCapApiKey, encryptionKey) : null
-    const oneInchApiKeyEnc = oneInchApiKey ? encrypt(oneInchApiKey, encryptionKey) : null
-    const binanceApiKeyEnc = binanceApiKey ? encrypt(binanceApiKey, encryptionKey) : null
-    const binanceApiSecretEnc = binanceApiSecret ? encrypt(binanceApiSecret, encryptionKey) : null
+    // Accept both camelCase and snake_case field names
+    const fields: { column: string; value: string | undefined }[] = [
+      { column: 'alchemy_app_id', value: body.alchemyAppId ?? body.alchemy_app_id },
+      { column: 'alchemy_api_key', value: body.alchemyApiKey ?? body.alchemy_api_key },
+      { column: 'etherscan_api_key', value: body.etherscanApiKey ?? body.etherscan_api_key },
+      { column: 'coinmarketcap_api_key', value: body.coinMarketCapApiKey ?? body.coinmarketcap_api_key },
+      { column: 'oneinch_api_key', value: body.oneInchApiKey ?? body.oneinch_api_key },
+      { column: 'binance_api_key', value: body.binanceApiKey ?? body.binance_api_key },
+      { column: 'binance_api_secret', value: body.binanceApiSecret ?? body.binance_api_secret },
+    ]
+
+    // Only update fields that were actually provided (partial update)
+    const setClauses: string[] = []
+    const params: (string | null)[] = []
+
+    for (const { column, value } of fields) {
+      if (value !== undefined && typeof value === 'string' && value.trim()) {
+        const encrypted = encrypt(value.trim(), encryptionKey)
+        setClauses.push(
+          `${column}_encrypted = ?, ${column}_iv = ?, ${column}_tag = ?`
+        )
+        params.push(encrypted.encrypted, encrypted.iv, encrypted.authTag)
+      }
+    }
+
+    // Handle binance_testnet flag (plain boolean, not encrypted)
+    const binanceTestnet = body.binanceTestnet ?? body.binance_testnet
+    if (binanceTestnet !== undefined) {
+      setClauses.push('binance_testnet = ?')
+      params.push(binanceTestnet ? '1' : '0')
+    }
+
+    if (setClauses.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'No API keys provided to update'
+      })
+    }
+
+    setClauses.push('updated_at = CURRENT_TIMESTAMP')
 
     db.prepare(`
       UPDATE api_configs
-      SET
-        alchemy_app_id_encrypted = ?,
-        alchemy_app_id_iv = ?,
-        alchemy_app_id_tag = ?,
-        alchemy_api_key_encrypted = ?,
-        alchemy_api_key_iv = ?,
-        alchemy_api_key_tag = ?,
-        etherscan_api_key_encrypted = ?,
-        etherscan_api_key_iv = ?,
-        etherscan_api_key_tag = ?,
-        coinmarketcap_api_key_encrypted = ?,
-        coinmarketcap_api_key_iv = ?,
-        coinmarketcap_api_key_tag = ?,
-        oneinch_api_key_encrypted = ?,
-        oneinch_api_key_iv = ?,
-        oneinch_api_key_tag = ?,
-        binance_api_key_encrypted = ?,
-        binance_api_key_iv = ?,
-        binance_api_key_tag = ?,
-        binance_api_secret_encrypted = ?,
-        binance_api_secret_iv = ?,
-        binance_api_secret_tag = ?,
-        updated_at = CURRENT_TIMESTAMP
+      SET ${setClauses.join(', ')}
       WHERE id = 1
-    `).run(
-      alchemyAppIdEnc?.encrypted || null,
-      alchemyAppIdEnc?.iv || null,
-      alchemyAppIdEnc?.authTag || null,
-      alchemyApiKeyEnc?.encrypted || null,
-      alchemyApiKeyEnc?.iv || null,
-      alchemyApiKeyEnc?.authTag || null,
-      etherscanApiKeyEnc?.encrypted || null,
-      etherscanApiKeyEnc?.iv || null,
-      etherscanApiKeyEnc?.authTag || null,
-      coinMarketCapApiKeyEnc?.encrypted || null,
-      coinMarketCapApiKeyEnc?.iv || null,
-      coinMarketCapApiKeyEnc?.authTag || null,
-      oneInchApiKeyEnc?.encrypted || null,
-      oneInchApiKeyEnc?.iv || null,
-      oneInchApiKeyEnc?.authTag || null,
-      binanceApiKeyEnc?.encrypted || null,
-      binanceApiKeyEnc?.iv || null,
-      binanceApiKeyEnc?.authTag || null,
-      binanceApiSecretEnc?.encrypted || null,
-      binanceApiSecretEnc?.iv || null,
-      binanceApiSecretEnc?.authTag || null
-    )
+    `).run(...params)
+
+    // Reload API keys into memory so changes take effect immediately
+    try {
+      const { decryptAlchemyApiKey, decryptCoinMarketCapApiKey, decryptOneInchApiKey, decryptBinanceApiKey, decryptBinanceApiSecret } = await import('../services/encryption-service.js')
+      const { apiKeyStore } = await import('../services/api-key-store.js')
+      const password = body.password
+
+      if (password) {
+        // Read binance_testnet from DB
+        const apiConfigRow = db.prepare('SELECT binance_testnet FROM api_configs WHERE id = 1').get() as any
+        apiKeyStore.loadKeys({
+          alchemyApiKey: decryptAlchemyApiKey(password) || undefined,
+          coinMarketCapApiKey: decryptCoinMarketCapApiKey(password) || undefined,
+          oneInchApiKey: decryptOneInchApiKey(password) || undefined,
+          binanceApiKey: decryptBinanceApiKey(password) || undefined,
+          binanceApiSecret: decryptBinanceApiSecret(password) || undefined,
+          binanceTestnet: !!apiConfigRow?.binance_testnet,
+        })
+        console.log('[api-config] Reloaded API keys into memory after update')
+      }
+    } catch (reloadErr: any) {
+      console.warn('[api-config] Warning: Failed to reload API keys:', reloadErr.message)
+    }
 
     res.json({
       success: true,
@@ -518,7 +531,7 @@ router.post('/network-configs/get', deriveEncryptionKey, (req, res) => {
   }
 })
 
-// Save network RPC configurations (replaces all configs)
+// Save network RPC configurations (upserts per network)
 router.post('/network-configs/save', deriveEncryptionKey, (req, res) => {
   try {
     const { configs } = req.body
@@ -532,30 +545,37 @@ router.post('/network-configs/save', deriveEncryptionKey, (req, res) => {
       })
     }
 
-    // Use transaction to replace all configs atomically
+    // Upsert each config individually (don't delete other networks)
+    const upsertStmt = db.prepare(`
+      INSERT INTO network_rpc_configs (
+        network_id, rpc_provider,
+        custom_rpc_url_encrypted, custom_rpc_url_iv, custom_rpc_url_tag
+      ) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(network_id) DO UPDATE SET
+        rpc_provider = excluded.rpc_provider,
+        custom_rpc_url_encrypted = excluded.custom_rpc_url_encrypted,
+        custom_rpc_url_iv = excluded.custom_rpc_url_iv,
+        custom_rpc_url_tag = excluded.custom_rpc_url_tag,
+        updated_at = CURRENT_TIMESTAMP
+    `)
+
     db.transaction(() => {
-      // Clear existing configs
-      db.prepare('DELETE FROM network_rpc_configs').run()
-
-      // Insert new configs
-      const insertStmt = db.prepare(`
-        INSERT INTO network_rpc_configs (
-          network_id, rpc_provider,
-          custom_rpc_url_encrypted, custom_rpc_url_iv, custom_rpc_url_tag
-        ) VALUES (?, ?, ?, ?, ?)
-      `)
-
       for (const config of configs) {
-        let customRpcUrlEnc = null
+        // Accept both camelCase and snake_case field names
+        const networkId = config.networkId ?? config.network_id ?? config.chain_id
+        const customRpcUrl = config.customRpcUrl ?? config.custom_rpc_url
+        const rpcProvider = config.rpcProvider ?? config.rpc_provider ?? 'default'
 
-        // Encrypt custom RPC URL if provided
-        if (config.customRpcUrl) {
-          customRpcUrlEnc = encrypt(config.customRpcUrl, encryptionKey)
+        if (!networkId) continue
+
+        let customRpcUrlEnc = null
+        if (customRpcUrl) {
+          customRpcUrlEnc = encrypt(customRpcUrl, encryptionKey)
         }
 
-        insertStmt.run(
-          config.networkId,
-          config.rpcProvider || 'default',
+        upsertStmt.run(
+          networkId,
+          rpcProvider,
           customRpcUrlEnc?.encrypted || null,
           customRpcUrlEnc?.iv || null,
           customRpcUrlEnc?.authTag || null

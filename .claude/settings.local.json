@@ -30,7 +30,26 @@
       "WebFetch(domain:elfsight.com)",
       "Bash(cd:*)",
       "Bash(node:*)",
-      "Bash(chmod +x:*)"
+      "Bash(chmod +x:*)",
+      "Bash(curl:*)",
+      "Bash(lsof:*)",
+      "Bash(cat:*)",
+      "Bash(# Test health check to see if RPCs work now\ncurl -s http://localhost:3001/api/health/test-services 2>&1 | python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(f'{r[\\\\\"service\\\\\"]}: {r[\\\\\"status\\\\\"]} - {r[\\\\\"message\\\\\"][:60]} \\({r.get\\(\\\\\"provider\\\\\",\\\\\"\\\\\"\\)}\\)'\\)  for r in d['results']]\" 2>&1)",
+      "Bash(# Search for MON on Binance\ncurl -s 'https://api.binance.com/api/v3/exchangeInfo' 2>&1 | python3 -c \"\nimport sys, json\nd = json.load\\(sys.stdin\\)\nmon = [s['symbol'] for s in d['symbols'] if 'MON' in s['symbol'] and s['status']=='TRADING']\nprint\\('\\\\n'.join\\(sorted\\(mon\\)\\)\\)\n\" 2>&1)",
+      "Bash(# Search more broadly for monad\ncurl -s 'https://api.binance.com/api/v3/exchangeInfo' 2>&1 | python3 -c \"\nimport sys, json\nd = json.load\\(sys.stdin\\)\nmon = [s['symbol'] for s in d['symbols'] if 'MONAD' in s['symbol'].upper\\(\\) and s['status']=='TRADING']\nprint\\('MONAD matches:', mon\\)\nmon2 = [s['symbol'] for s in d['symbols'] if s['symbol'].startswith\\('MON'\\) and s['status']=='TRADING']\nprint\\('MON* matches:', mon2\\)\n\" 2>&1)",
+      "WebFetch(domain:docs.unichain.org)",
+      "WebFetch(domain:basescan.org)",
+      "WebFetch(domain:docs.chain.link)",
+      "WebFetch(domain:api-docs.uniswap.org)",
+      "WebFetch(domain:www.geckoterminal.com)",
+      "WebFetch(domain:api.coingecko.com)",
+      "WebFetch(domain:unichain.blockscout.com)",
+      "Bash(# Try Blockscout API for Unichain top tokens\ncurl -s 'https://unichain.blockscout.com/api/v2/tokens?type=ERC-20&sort=circulating_market_cap&order=desc' 2>/dev/null | python3 -c \"\nimport sys,json\ntry:\n    d=json.load\\(sys.stdin\\)\n    items = d.get\\('items', d\\) if isinstance\\(d, dict\\) else d\n    for t in items[:20]:\n        print\\(f\\\\\"{t.get\\('symbol','?'\\):8s} {t.get\\('address','?'\\)} decimals={t.get\\('decimals','?'\\)} name={t.get\\('name','?'\\)}\\\\\"\\)\nexcept Exception as e:\n    print\\(f'Error: {e}'\\)\n\" 2>/dev/null)",
+      "Bash(echo === Tokens in SYMBOL_TO_QUOTE_TOKEN that need cross-network checks ===:*)",
+      "Bash(echo === Checking Unichain via Blockscout ===:*)",
+      "Bash(echo === UNI on Base ===:*)",
+      "Bash(echo:*)",
+      "WebFetch(domain:data.chain.link)"
     ]
   }
 }

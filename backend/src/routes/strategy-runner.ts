@@ -39,10 +39,9 @@ router.get('/active', (_req, res) => {
 router.post('/:strategyId/start', async (req, res) => {
   try {
     const { strategyId } = req.params
-    const { timeoutMs, maxLogEntries } = req.body || {}
+    const { maxLogEntries } = req.body || {}
 
     const runner = strategyRunnerManager.getOrCreateRunner(strategyId, {
-      timeoutMs,
       maxLogEntries
     })
 
