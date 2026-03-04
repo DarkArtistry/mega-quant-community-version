@@ -8,6 +8,9 @@ import { AccountAssignmentPanel } from '@/features/settings/AccountAssignmentPan
 import { Play, Square, Pause, Save, ChevronUp } from 'lucide-react'
 import { useAppStore } from '@/stores/useAppStore'
 import { strategyRunnerApi } from '@/api/strategy-runner'
+import { ordersApi } from '@/api/orders'
+import { pnlApi } from '@/api/pnl'
+import type { Order, Position } from '@/types'
 
 const DEFAULT_STRATEGY_CODE = `// MegaQuant Strategy
 // The 'dt' object gives you access to all trading operations.
@@ -74,6 +77,11 @@ export function StrategyEditor({
   const [oldestLogId, setOldestLogId] = useState<string | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
   const maxDisplayLogs = useRef(1000)
+
+  // Trades & PnL state
+  const [orders, setOrders] = useState<Order[]>([])
+  const [positions, setPositions] = useState<Position[]>([])
+  const [pnlSummary, setPnlSummary] = useState<{ realized: number; unrealized: number; total: number } | null>(null)
 
   // Resizable panel state
   const [bottomHeight, setBottomHeight] = useState(200)
@@ -209,6 +217,33 @@ export function StrategyEditor({
         clearInterval(interval)
       }
     }, 1000)
+    return () => clearInterval(interval)
+  }, [strategyId, status])
+
+  // Fetch orders and PnL for this strategy
+  useEffect(() => {
+    if (!strategyId) return
+    const fetchTradesAndPnl = async () => {
+      try {
+        const [ordersRes, positionsRes, totalRes] = await Promise.allSettled([
+          ordersApi.getHistory({ strategy_id: strategyId, limit: 100 }),
+          pnlApi.getPositions(strategyId, undefined, 'open'),
+          pnlApi.getTotal(strategyId),
+        ])
+        if (ordersRes.status === 'fulfilled') setOrders(ordersRes.value.data.orders || [])
+        if (positionsRes.status === 'fulfilled') setPositions(positionsRes.value.data.positions || [])
+        if (totalRes.status === 'fulfilled') {
+          const s = totalRes.value.data.summary
+          setPnlSummary({
+            realized: s?.totalRealizedPnl ?? 0,
+            unrealized: s?.totalUnrealizedPnl ?? 0,
+            total: s?.totalPnl ?? 0,
+          })
+        }
+      } catch { /* ignore */ }
+    }
+    fetchTradesAndPnl()
+    const interval = setInterval(fetchTradesAndPnl, 5000)
     return () => clearInterval(interval)
   }, [strategyId, status])
 
@@ -360,12 +395,120 @@ export function StrategyEditor({
               </div>
             </TabsContent>
 
-            <TabsContent value="trades" className="flex-1 m-0 p-2">
-              <div className="text-xs text-text-tertiary">No trades recorded</div>
+            <TabsContent value="trades" className="flex-1 m-0 overflow-auto">
+              {orders.length === 0 ? (
+                <div className="p-2 text-xs text-text-tertiary">No trades recorded</div>
+              ) : (
+                <table className="w-full text-2xs">
+                  <thead>
+                    <tr className="border-b border-border text-text-tertiary sticky top-0 bg-surface">
+                      <th className="text-left px-2 py-1 font-medium">Time</th>
+                      <th className="text-left px-2 py-1 font-medium">Side</th>
+                      <th className="text-left px-2 py-1 font-medium">Asset</th>
+                      <th className="text-right px-2 py-1 font-medium">Qty</th>
+                      <th className="text-right px-2 py-1 font-medium">Price</th>
+                      <th className="text-left px-2 py-1 font-medium">Protocol</th>
+                      <th className="text-left px-2 py-1 font-medium">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {orders.map((o) => (
+                      <tr key={o.id} className="border-b border-border last:border-b-0 hover:bg-background">
+                        <td className="px-2 py-1 text-text-secondary">{formatCompactTime(o.filled_at || o.updated_at)}</td>
+                        <td className="px-2 py-1">
+                          <span className={o.side === 'buy' ? 'text-positive' : 'text-negative'}>{o.side}</span>
+                        </td>
+                        <td className="px-2 py-1 font-medium">{formatOrderPair(o)}</td>
+                        <td className="px-2 py-1 text-right font-mono">{formatCompactQty(o.filled_quantity || o.quantity)}</td>
+                        <td className="px-2 py-1 text-right font-mono">{formatCompactPrice(o.filled_price || o.price)}</td>
+                        <td className="px-2 py-1 text-text-secondary">{o.protocol}</td>
+                        <td className="px-2 py-1">
+                          <Badge variant={o.status === 'filled' ? 'positive' : o.status === 'pending' ? 'warning' : 'default'}>
+                            {o.status}
+                          </Badge>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </TabsContent>
 
-            <TabsContent value="pnl" className="flex-1 m-0 p-2">
-              <div className="text-xs text-text-tertiary">Run strategy to see PnL</div>
+            <TabsContent value="pnl" className="flex-1 m-0 overflow-auto">
+              {!pnlSummary && positions.length === 0 ? (
+                <div className="p-2 text-xs text-text-tertiary">Run strategy to see PnL</div>
+              ) : (
+                <div className="p-2 space-y-2">
+                  {/* PnL Summary */}
+                  {pnlSummary && (
+                    <div className="flex gap-4 text-2xs">
+                      <div>
+                        <span className="text-text-tertiary">Realized: </span>
+                        <span className={pnlSummary.realized > 0 ? 'text-positive' : pnlSummary.realized < 0 ? 'text-negative' : ''}>
+                          {formatPnlUsd(pnlSummary.realized)}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-text-tertiary">Unrealized: </span>
+                        <span className={pnlSummary.unrealized > 0 ? 'text-positive' : pnlSummary.unrealized < 0 ? 'text-negative' : ''}>
+                          {formatPnlUsd(pnlSummary.unrealized)}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-text-tertiary">Total: </span>
+                        <span className={`font-semibold ${pnlSummary.total > 0 ? 'text-positive' : pnlSummary.total < 0 ? 'text-negative' : ''}`}>
+                          {formatPnlUsd(pnlSummary.total)}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                  {/* Positions */}
+                  {positions.length > 0 && (
+                    <table className="w-full text-2xs">
+                      <thead>
+                        <tr className="border-b border-border text-text-tertiary">
+                          <th className="text-left px-2 py-1 font-medium">Asset</th>
+                          <th className="text-left px-2 py-1 font-medium">Side</th>
+                          <th className="text-right px-2 py-1 font-medium">Qty</th>
+                          <th className="text-right px-2 py-1 font-medium">Entry</th>
+                          <th className="text-right px-2 py-1 font-medium">Current</th>
+                          <th className="text-right px-2 py-1 font-medium">Realized</th>
+                          <th className="text-right px-2 py-1 font-medium">Unrealized</th>
+                          <th className="text-left px-2 py-1 font-medium">Protocol</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {positions.map((p) => {
+                          const unrealized = parseFloat(p.unrealized_pnl || '0')
+                          const realized = parseFloat(p.realized_pnl || '0')
+                          return (
+                            <tr key={p.id} className="border-b border-border last:border-b-0 hover:bg-background">
+                              <td className="px-2 py-1 font-medium">{p.asset_symbol}</td>
+                              <td className="px-2 py-1">
+                                <span className={p.side === 'long' ? 'text-positive' : 'text-negative'}>{p.side}</span>
+                              </td>
+                              <td className="px-2 py-1 text-right font-mono">{formatCompactQty(p.quantity)}</td>
+                              <td className="px-2 py-1 text-right font-mono">{formatCompactPrice(p.avg_entry_price)}</td>
+                              <td className="px-2 py-1 text-right font-mono">{p.current_price ? formatCompactPrice(p.current_price) : '—'}</td>
+                              <td className="px-2 py-1 text-right font-mono">
+                                <span className={realized > 0 ? 'text-positive' : realized < 0 ? 'text-negative' : 'text-text-tertiary'}>
+                                  {formatPnlUsd(realized)}
+                                </span>
+                              </td>
+                              <td className="px-2 py-1 text-right font-mono">
+                                <span className={unrealized > 0 ? 'text-positive' : unrealized < 0 ? 'text-negative' : 'text-text-tertiary'}>
+                                  {formatPnlUsd(unrealized)}
+                                </span>
+                              </td>
+                              <td className="px-2 py-1 text-text-secondary">{p.protocol || '—'}</td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              )}
             </TabsContent>
 
             <TabsContent value="accounts" className="flex-1 m-0 overflow-auto">
@@ -382,4 +525,59 @@ export function StrategyEditor({
       </div>
     </div>
   )
+}
+
+/* ------------------------------------------------------------------ */
+/*  Helper functions for Trades & PnL tabs                            */
+/* ------------------------------------------------------------------ */
+
+function formatCompactTime(ts: string | undefined): string {
+  if (!ts) return '—'
+  try {
+    const d = new Date(ts.endsWith('Z') ? ts : ts + 'Z')
+    return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  } catch {
+    return ts
+  }
+}
+
+function formatCompactQty(value: string | undefined): string {
+  if (!value) return '—'
+  const num = parseFloat(value)
+  if (isNaN(num)) return value
+  if (num === 0) return '0'
+  if (num < 0.0001) return '<0.0001'
+  if (num < 1) return num.toFixed(6)
+  if (num < 1000) return num.toFixed(4)
+  return num.toLocaleString('en-US', { maximumFractionDigits: 2 })
+}
+
+function formatCompactPrice(value: string | undefined): string {
+  if (!value) return '—'
+  const num = parseFloat(value)
+  if (isNaN(num)) return value
+  if (num === 0) return '0'
+  if (num < 0.01) return num.toExponential(2)
+  if (num < 1) return num.toFixed(6)
+  if (num < 100) return num.toFixed(4)
+  return num.toLocaleString('en-US', { maximumFractionDigits: 2 })
+}
+
+function formatOrderPair(order: Order): string {
+  if (order.token_in_symbol && order.token_out_symbol) {
+    const counterpart =
+      order.asset_symbol === order.token_in_symbol
+        ? order.token_out_symbol
+        : order.asset_symbol === order.token_out_symbol
+          ? order.token_in_symbol
+          : order.token_out_symbol
+    return `${order.asset_symbol} / ${counterpart}`
+  }
+  return order.asset_symbol
+}
+
+function formatPnlUsd(value: number): string {
+  const abs = Math.abs(value)
+  const formatted = abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return value < 0 ? `-$${formatted}` : `$${formatted}`
 }

@@ -99,8 +99,8 @@ export class PnlEngine {
         action = 'open'
 
         db.prepare(`
-          INSERT INTO positions (id, strategy_id, asset_symbol, asset_address, chain_id, side, quantity, avg_entry_price, realized_pnl, total_fees, status, account_id, quote_asset_symbol, protocol)
-          VALUES (?, ?, ?, ?, ?, 'long', ?, ?, '0', ?, 'open', ?, ?, ?)
+          INSERT INTO positions (id, strategy_id, asset_symbol, asset_address, chain_id, side, quantity, avg_entry_price, current_price, realized_pnl, unrealized_pnl, total_fees, status, account_id, quote_asset_symbol, protocol)
+          VALUES (?, ?, ?, ?, ?, 'long', ?, ?, ?, '0', '0', ?, 'open', ?, ?, ?)
         `).run(
           positionId,
           trade.strategyId,
@@ -108,6 +108,7 @@ export class PnlEngine {
           trade.assetAddress || null,
           trade.chainId || null,
           trade.quantity,
+          trade.price,
           trade.price,
           fees.toString(),
           accountId,
@@ -128,7 +129,7 @@ export class PnlEngine {
 
         db.prepare(`
           UPDATE positions
-          SET quantity = ?, avg_entry_price = ?, total_fees = ?, updated_at = datetime('now')
+          SET quantity = ?, avg_entry_price = ?, total_fees = ?
           WHERE id = ?
         `).run(
           newTotalQty.toString(),
@@ -184,8 +185,8 @@ export class PnlEngine {
         action = 'open'
 
         db.prepare(`
-          INSERT INTO positions (id, strategy_id, asset_symbol, asset_address, chain_id, side, quantity, avg_entry_price, realized_pnl, total_fees, status, account_id, quote_asset_symbol, protocol)
-          VALUES (?, ?, ?, ?, ?, 'short', ?, ?, '0', ?, 'open', ?, ?, ?)
+          INSERT INTO positions (id, strategy_id, asset_symbol, asset_address, chain_id, side, quantity, avg_entry_price, current_price, realized_pnl, unrealized_pnl, total_fees, status, account_id, quote_asset_symbol, protocol)
+          VALUES (?, ?, ?, ?, ?, 'short', ?, ?, ?, '0', '0', ?, 'open', ?, ?, ?)
         `).run(
           positionId,
           trade.strategyId,
@@ -193,6 +194,7 @@ export class PnlEngine {
           trade.assetAddress || null,
           trade.chainId || null,
           trade.quantity,
+          trade.price,
           trade.price,
           fees.toString(),
           accountId,
@@ -261,6 +263,19 @@ export class PnlEngine {
           positionId
         )
       }
+    }
+
+    // Update current price and unrealized PnL using the trade price
+    const posAfterTrade = db.prepare('SELECT * FROM positions WHERE id = ?').get(positionId) as any
+    if (posAfterTrade && posAfterTrade.status === 'open') {
+      const posQty = parseFloat(posAfterTrade.quantity)
+      const posAvg = parseFloat(posAfterTrade.avg_entry_price)
+      const unrealized = posAfterTrade.side === 'long'
+        ? (price - posAvg) * posQty
+        : (posAvg - price) * posQty
+      db.prepare('UPDATE positions SET current_price = ?, unrealized_pnl = ? WHERE id = ?').run(
+        price.toString(), unrealized.toString(), positionId
+      )
     }
 
     // Record trade fill

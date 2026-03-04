@@ -34,15 +34,17 @@ function getExplorerTxUrl(order: Order): string | null {
   return `${base}/tx/${order.tx_hash}`
 }
 
-/** Format a trading pair as "IN → OUT" with amounts, or fall back to asset_symbol */
+/** Format a trading pair as "ASSET / COUNTER" so each leg of a linked swap looks different */
 function formatPair(order: Order): { label: string; detail?: string } {
   if (order.token_in_symbol && order.token_out_symbol) {
-    const inAmt = order.token_in_amount ? formatQty(order.token_in_amount) : ''
-    const outAmt = order.token_out_amount ? formatQty(order.token_out_amount) : ''
-    return {
-      label: `${order.token_in_symbol} → ${order.token_out_symbol}`,
-      detail: inAmt && outAmt ? `${inAmt} → ${outAmt}` : undefined,
-    }
+    // Show {asset_symbol} / {counterpart} — sell USDT shows "USDT / ETH", buy ETH shows "ETH / USDT"
+    const counterpart =
+      order.asset_symbol === order.token_in_symbol
+        ? order.token_out_symbol
+        : order.asset_symbol === order.token_out_symbol
+          ? order.token_in_symbol
+          : order.token_out_symbol
+    return { label: `${order.asset_symbol} / ${counterpart}` }
   }
   return { label: order.asset_symbol }
 }

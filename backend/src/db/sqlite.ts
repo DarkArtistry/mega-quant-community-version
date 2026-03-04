@@ -522,9 +522,7 @@ function initializeSchema() {
         quantity TEXT NOT NULL,
         price TEXT NOT NULL,
         realized_pnl TEXT DEFAULT '0',
-        created_at TEXT DEFAULT (datetime('now')),
-        FOREIGN KEY (trade_id) REFERENCES trades(id) ON DELETE CASCADE,
-        FOREIGN KEY (position_id) REFERENCES positions(id) ON DELETE CASCADE
+        created_at TEXT DEFAULT (datetime('now'))
       );
 
       CREATE INDEX idx_trade_fills_trade ON trade_fills(trade_id);
@@ -611,9 +609,7 @@ function runMigrations() {
         quantity TEXT NOT NULL,
         price TEXT NOT NULL,
         realized_pnl TEXT DEFAULT '0',
-        created_at TEXT DEFAULT (datetime('now')),
-        FOREIGN KEY (trade_id) REFERENCES trades(id) ON DELETE CASCADE,
-        FOREIGN KEY (position_id) REFERENCES positions(id) ON DELETE CASCADE
+        created_at TEXT DEFAULT (datetime('now'))
       )
     `}
   ]
@@ -1030,6 +1026,35 @@ function runMigrations() {
     console.log('Created/verified funding_payments table (enhanced schema)')
   } catch (e: any) {
     console.error('Error creating funding_payments:', e.message)
+  }
+
+  // Fix trade_fills: remove broken FOREIGN KEY constraints
+  // trade_fills.trade_id used synthetic IDs (e.g. "6440297-sell") not trades.id references
+  try {
+    const tfSchema = db.prepare(`
+      SELECT sql FROM sqlite_master WHERE type='table' AND name='trade_fills'
+    `).get() as any
+    if (tfSchema && tfSchema.sql.includes('FOREIGN KEY')) {
+      console.log('Recreating trade_fills without FOREIGN KEY constraints...')
+      db.exec(`DROP TABLE IF EXISTS trade_fills`)
+      db.exec(`
+        CREATE TABLE trade_fills (
+          id TEXT PRIMARY KEY,
+          trade_id TEXT NOT NULL,
+          position_id TEXT NOT NULL,
+          action TEXT NOT NULL,
+          quantity TEXT NOT NULL,
+          price TEXT NOT NULL,
+          realized_pnl TEXT DEFAULT '0',
+          created_at TEXT DEFAULT (datetime('now'))
+        )
+      `)
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_trade_fills_trade ON trade_fills(trade_id)`)
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_trade_fills_position ON trade_fills(position_id)`)
+      console.log('trade_fills table recreated without FK constraints')
+    }
+  } catch (e: any) {
+    console.error('Error fixing trade_fills:', e.message)
   }
 
   // Extend portfolio_snapshots with lending_value_usd and account_id
