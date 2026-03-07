@@ -5,6 +5,7 @@ import express from 'express'
 import { strategyRunnerManager } from '../lib/strategy/StrategyRunner.js'
 import { liveDataService } from '../services/live-data.js'
 import { getDatabase } from '../db/index.js'
+import { accountKeyStore } from '../services/account-key-store.js'
 
 const router = express.Router()
 
@@ -40,6 +41,13 @@ router.post('/:strategyId/start', async (req, res) => {
   try {
     const { strategyId } = req.params
     const { maxLogEntries } = req.body || {}
+
+    if (!accountKeyStore.isAppUnlocked()) {
+      return res.status(403).json({
+        success: false,
+        error: 'App is locked. Please unlock the app before running strategies.'
+      })
+    }
 
     const runner = strategyRunnerManager.getOrCreateRunner(strategyId, {
       maxLogEntries

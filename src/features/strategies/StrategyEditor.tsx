@@ -169,6 +169,10 @@ export function StrategyEditor({
     if (!strategyId) return
 
     const isActive = status === 'running' || status === 'paused' || status === 'init' || status === 'initializing'
+    const wasActive =
+      prevStatusRef.current === 'running' ||
+      prevStatusRef.current === 'paused' ||
+      prevStatusRef.current === 'initializing'
 
     // Clear logs when transitioning to running from a non-active state
     if (
@@ -182,7 +186,41 @@ export function StrategyEditor({
     }
     prevStatusRef.current = status
 
-    if (!isActive) return
+    if (!isActive) {
+      // Strategy just stopped (e.g. via WebSocket push) — do final polls
+      // to fetch any remaining logs that were produced before we got notified
+      if (wasActive) {
+        const fetchRemainingLogs = async () => {
+          for (let i = 0; i < 3; i++) {
+            try {
+              const res = await strategyRunnerApi.status(strategyId, { since: lastLogTimestamp.current })
+              const entries = res.data.logs || []
+              if (entries.length > 0) {
+                const newLogs: LogEntry[] = entries.map((entry) => ({
+                  timestamp: entry.timestamp,
+                  level: entry.level as LogEntry['level'],
+                  message: entry.message,
+                }))
+                setLogs((prev) => {
+                  const combined = [...prev, ...newLogs]
+                  if (combined.length > maxDisplayLogs.current) {
+                    setHasMoreLogs(true)
+                    return combined.slice(-maxDisplayLogs.current)
+                  }
+                  return combined
+                })
+                lastLogTimestamp.current = entries[entries.length - 1].timestamp
+              }
+            } catch {
+              // ignore
+            }
+            if (i < 2) await new Promise((r) => setTimeout(r, 300))
+          }
+        }
+        fetchRemainingLogs()
+      }
+      return
+    }
 
     const poll = async () => {
       try {
@@ -206,11 +244,11 @@ export function StrategyEditor({
         }
         // Sync actual backend state back to parent
         const backendState = res.data.status?.state
+        if (backendState === 'stopped' || backendState === 'error' || backendState === 'idle') {
+          return backendState
+        }
         if (backendState && backendState !== status) {
           onStatusChange?.(backendState)
-        }
-        if (backendState === 'stopped' || backendState === 'error' || backendState === 'idle') {
-          return 'done'
         }
       } catch {
         // Runner might not exist yet, ignore
@@ -221,8 +259,13 @@ export function StrategyEditor({
     poll()
     const interval = setInterval(async () => {
       const result = await poll()
-      if (result === 'done') {
+      if (result !== 'continue') {
+        // Strategy completed — do one final poll to catch remaining logs,
+        // then notify parent of state change
         clearInterval(interval)
+        await new Promise(r => setTimeout(r, 500))
+        await poll()
+        onStatusChange?.(result)
       }
     }, 1000)
     return () => clearInterval(interval)

@@ -19,6 +19,7 @@ const sections: DocSection[] = [
       { label: 'Overview', id: 'overview' },
       { label: 'Quick Start', id: 'quick-start' },
       { label: 'SDK Object', id: 'sdk-object' },
+      { label: 'Addresses', id: 'addresses-reference' },
       { label: 'Testnet Setup', id: 'testnet-guide' },
     ],
   },
@@ -78,6 +79,9 @@ const sections: DocSection[] = [
     items: [
       { label: 'Architecture', id: 'v4-architecture' },
       { label: 'Limit Orders', id: 'v4-limit-orders' },
+      { label: 'Stop Orders', id: 'v4-stop-orders' },
+      { label: 'Bracket (OCO)', id: 'v4-bracket-orders' },
+      { label: 'TWAP', id: 'v4-twap' },
       { label: 'Claim Tokens', id: 'v4-claim-tokens' },
       { label: 'Deployment', id: 'v4-deployment' },
     ],
@@ -327,7 +331,7 @@ dt.ethereum.uniswapV3.swap({ tokenIn: 'WETH', tokenOut: 'USDC', amountIn: '1.0' 
       try {
         if (tick % 2 === 1) {
           // Check WETH balance before selling
-          const wethAddr = '0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14'
+          const wethAddr = addresses.SEPOLIA_WETH
           const wethBal = await dt.sepolia.getTokenBalance(wethAddr)
           const sellAmt = '0.001'
           if (parseFloat(wethBal) >= parseFloat(sellAmt)) {
@@ -415,9 +419,370 @@ Binance: Connected
             <li><strong>Helpers:</strong> Use <Code>chain.txLink(hash)</Code> or <Code>result.explorerUrl</Code> for explorer links</li>
           </ul>
           <p className="text-xs text-text-secondary leading-relaxed mt-3">
-            Once this works, explore the <strong>Examples</strong> section for more strategies including
-            cross-chain arbitrage, delta-neutral hedging, and CEX trading.
+            Once this works, try the <strong>V4 Hook Demo</strong> below to test on-chain limit orders,
+            stop-losses, and bracket orders — or explore the <strong>Examples</strong> section for more strategies.
           </p>
+
+          <h3 className="text-sm font-semibold mt-8 mb-2">Step 7b: V4 Hook Demo (Unichain Sepolia)</h3>
+          <p className="text-xs text-text-secondary leading-relaxed mb-2">
+            This strategy demonstrates every Uniswap V4 hook feature: pool discovery, dynamic volatility fees,
+            limit orders, stop-loss orders, bracket (OCO) orders, and TWAP. Each step logs tx hashes with
+            block explorer links so you can inspect every on-chain action. Requires a funded wallet on
+            Unichain Sepolia (see Step 3). For hook architecture details, see the <strong>V4 Hooks</strong> section.
+          </p>
+          <CodeBlock
+            title="V4 Hook Demo — paste this and click Run (Unichain Sepolia)"
+            code={`async function execute(dt) {
+  const EXPLORER = addresses['unichain-sepolia'].blockExplorer
+  const chain = dt['unichain-sepolia']
+  if (!chain) {
+    console.error('Unichain Sepolia not configured. Assign an account in the Accounts tab.')
+    return
+  }
+  const v4 = chain.uniswapV4
+
+  console.log('╔══════════════════════════════════════════════════╗')
+  console.log('║         MegaQuant V4 Hook Demo                  ║')
+  console.log('║         Chain: Unichain Sepolia (1301)          ║')
+  console.log('╚══════════════════════════════════════════════════╝\\n')
+
+  // ── STEP 1: Pool Discovery ──
+  // Queries the PoolRegistry contract for all pools created with our hook.
+  // The registry stores metadata (token pair, tick spacing, name, creator).
+  console.log('[1/9] Querying PoolRegistry for registered pools...')
+  console.log('  Registry: ' + EXPLORER + '/address/' + addresses.UNICHAIN_SEPOLIA_POOL_REGISTRY)
+  try {
+    const pools = await v4.getPools()
+    console.log('  Found ' + pools.length + ' pool(s):')
+    for (const p of pools) {
+      console.log('    ' + p.name + ' | tickSpacing=' + p.tickSpacing + ' | active=' + p.active)
+      console.log('    Pool ID: ' + p.poolId)
+    }
+  } catch (e) { console.log('  [skip] ' + e.message) }
+
+  // ── STEP 2: Read Live Pool State ──
+  // Reads on-chain state from the V4 PoolManager: current tick (price),
+  // sqrtPriceX96 (internal price encoding), liquidity, and dynamic fee.
+  console.log('\\n[2/9] Reading WETH/USDC pool state...')
+  console.log('  PoolManager: ' + EXPLORER + '/address/' + addresses.UNICHAIN_SEPOLIA_POOL_MANAGER)
+  let currentTick = 0
+  try {
+    const pool = await v4.getPoolInfo('WETH', 'USDC')
+    currentTick = pool.currentTick
+    console.log('  Current Tick:  ' + pool.currentTick)
+    console.log('  sqrtPriceX96:  ' + pool.sqrtPriceX96)
+    console.log('  Liquidity:     ' + pool.liquidity)
+    console.log('  Dynamic Fee:   ' + pool.fee + ' bps (' + pool.feePercentage + ')')
+  } catch (e) { console.log('  [skip] ' + e.message) }
+
+  // ── STEP 3: Volatility-Based Dynamic Fee ──
+  // The hook tracks EWMA (Exponentially Weighted Moving Average) of tick
+  // changes. Higher volatility = higher fee (0.05% to 1.0%).
+  // beforeSwap() returns this fee as a dynamic override on every swap.
+  console.log('\\n[3/9] Checking volatility-based dynamic fee...')
+  console.log('  Hook: ' + EXPLORER + '/address/' + addresses.UNICHAIN_SEPOLIA_HOOK)
+  try {
+    const { fee, feePercentage } = await v4.getVolatilityFee('WETH', 'USDC')
+    console.log('  Current Fee: ' + fee + ' bps (' + feePercentage + ')')
+    console.log('  Range: 500 bps (calm) → 10000 bps (volatile)')
+  } catch (e) { console.log('  [skip] ' + e.message) }
+
+  // ── STEP 4: Swap (with hook-managed dynamic fee) ──
+  // The hook intercepts every swap:
+  //   beforeSwap()  → computes EWMA fee, returns dynamic override
+  //   PoolManager   → executes swap at the dynamic fee
+  //   afterSwap()   → updates volatility state, checks limit/stop triggers
+  console.log('\\n[4/9] Swapping 0.0001 WETH → USDC via V4...')
+  try {
+    const swap = await v4.swap({
+      tokenIn: 'WETH', tokenOut: 'USDC', amountIn: '0.0001', slippage: 50
+    })
+    console.log('  ✓ Swap complete!')
+    console.log('  Amount In:  ' + swap.amountIn + ' WETH')
+    console.log('  Amount Out: ' + swap.amountOut + ' USDC')
+    console.log('  TX: ' + swap.txHash)
+    console.log('  ► ' + EXPLORER + '/tx/' + swap.txHash)
+  } catch (e) { console.log('  [skip] ' + e.message) }
+
+  // ── STEP 5: Limit Order ──
+  // Places an on-chain limit order in the MegaQuantHook contract.
+  // Your tokens go to the hook; you get ERC1155 claim tokens as receipt.
+  // When a future swap crosses your tick, afterSwap() auto-fills the order.
+  // No off-chain keeper needed — fully on-chain execution.
+  const limitTick = currentTick - 60 || -60
+  console.log('\\n[5/9] Placing LIMIT ORDER: sell 0.0001 WETH at tick ' + limitTick + '...')
+  try {
+    const limit = await v4.limitOrder({
+      tokenIn: 'WETH', tokenOut: 'USDC',
+      amountIn: '0.0001', tick: limitTick, deadline: 86400
+    })
+    console.log('  ✓ Limit order placed!')
+    console.log('  Order ID: ' + limit.orderId)
+    console.log('  Tick:     ' + limit.tick + '  |  Amount: 0.0001 WETH')
+    console.log('  TX: ' + limit.txHash)
+    console.log('  ► ' + EXPLORER + '/tx/' + limit.txHash)
+    console.log('  (Hook auto-fills when price crosses tick ' + limit.tick + ')')
+  } catch (e) { console.log('  [skip] ' + e.message) }
+
+  // ── STEP 6: Stop-Loss Order ──
+  // Like a limit order but triggers in the opposite direction.
+  // Stored in pendingStopOrders (separate from limit orders).
+  // afterSwap() checks stops when tick moves past the trigger.
+  const stopTick = currentTick - 120 || -120
+  console.log('\\n[6/9] Placing STOP-LOSS: sell 0.0001 WETH if tick drops to ' + stopTick + '...')
+  try {
+    const stop = await v4.stopOrder({
+      tokenIn: 'WETH', tokenOut: 'USDC',
+      amountIn: '0.0001', tick: stopTick
+    })
+    console.log('  ✓ Stop-loss placed!')
+    console.log('  Order ID: ' + stop.orderId)
+    console.log('  Tick:     ' + stop.tick + '  |  Amount: 0.0001 WETH')
+    console.log('  TX: ' + stop.txHash)
+    console.log('  ► ' + EXPLORER + '/tx/' + stop.txHash)
+    console.log('  (Hook auto-sells if price drops past tick ' + stop.tick + ')')
+  } catch (e) { console.log('  [skip] ' + e.message) }
+
+  // ── STEP 7: Bracket (OCO) Order ──
+  // "One-Cancels-Other" — take-profit + stop-loss linked on-chain.
+  // Router places both in one tx, hook links them via bracketPartner.
+  // When one fills, afterSwap() auto-cancels the other side.
+  const tpTick = currentTick + 60 || 60
+  const slTick = currentTick - 120 || -120
+  console.log('\\n[7/9] Placing BRACKET (OCO): TP at tick ' + tpTick + ', SL at tick ' + slTick + '...')
+  try {
+    const bracket = await v4.bracketOrder({
+      tokenIn: 'WETH', tokenOut: 'USDC',
+      amountIn: '0.0001', limitTick: tpTick, stopTick: slTick, deadline: 86400
+    })
+    console.log('  ✓ Bracket order placed! (2 linked on-chain orders)')
+    console.log('  Take-Profit: ' + bracket.limitOrderId + '  (tick ' + bracket.limitTick + ')')
+    console.log('  Stop-Loss:   ' + bracket.stopOrderId + '  (tick ' + bracket.stopTick + ')')
+    console.log('  TX: ' + bracket.txHash)
+    console.log('  ► ' + EXPLORER + '/tx/' + bracket.txHash)
+    console.log('  (When one fills, hook cancels the other automatically)')
+  } catch (e) { console.log('  [skip] ' + e.message) }
+
+  // ── STEP 8: View All Hook Orders ──
+  // Orders tracked in DB with protocol='uniswap-v4-hook'.
+  // HookOrderListener polls on-chain events to detect fills.
+  console.log('\\n[8/9] Fetching all hook orders...')
+  try {
+    const orders = await v4.getMyHookOrders()
+    console.log('  Total: ' + orders.length + ' order(s)')
+    for (const o of orders) {
+      console.log('    ' + o.orderType.padEnd(8) + ' | ' + o.side.padEnd(6) + ' | tick=' + String(o.tick).padEnd(6) + ' | ' + o.status)
+    }
+    console.log('  Pending: ' + orders.filter(o => o.status === 'pending').length)
+  } catch (e) { console.log('  [skip] ' + e.message) }
+
+  // ── STEP 9: Cancel & PnL ──
+  // Cancel sends on-chain tx: burns ERC1155 claim tokens, returns deposit.
+  console.log('\\n[9/9] Cancelling limit order & checking PnL...')
+  try {
+    const cancel = await v4.cancelLimitOrder('WETH', 'USDC', limitTick)
+    console.log('  ✓ Limit order cancelled')
+    console.log('  TX: ' + cancel.txHash)
+    console.log('  ► ' + EXPLORER + '/tx/' + cancel.txHash)
+  } catch (e) { console.log('  [skip] ' + e.message) }
+
+  try {
+    const pnl = dt.pnl.getTotal()
+    console.log('\\n  Portfolio PnL:')
+    console.log('    Realized:   $' + pnl.totalRealizedPnl.toFixed(4))
+    console.log('    Unrealized: $' + (pnl.totalUnrealizedPnl || 0).toFixed(4))
+  } catch (e) { console.log('  [skip] ' + e.message) }
+
+  console.log('\\n╔══════════════════════════════════════════════════╗')
+  console.log('║  Demo complete! Click any TX link above to view  ║')
+  console.log('║  the transaction on the block explorer.          ║')
+  console.log('╚══════════════════════════════════════════════════╝')
+}`}
+          />
+
+          <h3 className="text-sm font-semibold mt-8 mb-2">Step 8: Combined Full Platform Demo</h3>
+          <p className="text-xs text-text-secondary leading-relaxed mb-2">
+            This single strategy exercises the <strong>entire platform</strong> in one run: DEX swaps (Sepolia V3),
+            Binance CEX trades, V4 hook orders (Unichain Sepolia), and cross-venue PnL — all using built-in{' '}
+            <Code>addresses</Code> constants. Great for live demos. Requires funded wallets on Sepolia + Unichain
+            Sepolia (Steps 3-4) and Binance API keys (Step 5).
+          </p>
+          <CodeBlock
+            title="Combined Demo — paste this and click Run"
+            code={`async function execute(dt) {
+  console.log('╔══════════════════════════════════════════════════════╗')
+  console.log('║        MegaQuant Combined Platform Demo             ║')
+  console.log('╚══════════════════════════════════════════════════════╝')
+
+  // ── Environment Check ──
+  const chains = dt.getConfiguredChains()
+  console.log('\\nConfigured chains: ' + JSON.stringify(chains))
+  console.log('Binance:  ' + (dt.binance ? 'Connected' : 'Not connected'))
+  console.log('Addresses available: ' + Object.keys(addresses).filter(k => k === k.toUpperCase()).length + ' flat constants')
+
+  // ═══════════════════════════════════════════════════════════
+  // PART 1: DEX Swaps on Sepolia (Uniswap V3)
+  // ═══════════════════════════════════════════════════════════
+  console.log('\\n══════════ PART 1: Sepolia DEX (V3) ══════════')
+  const sepoliaExplorer = addresses.sepolia.blockExplorer
+  if (dt.sepolia && dt.sepolia.uniswapV3) {
+    try {
+      // Wrap some ETH first
+      console.log('[Sepolia] Wrapping 0.002 ETH -> WETH...')
+      const wrapTx = await dt.sepolia.wrapETH('0.002')
+      console.log('[Sepolia] Wrap TX: ' + sepoliaExplorer + '/tx/' + wrapTx)
+
+      // Check WETH balance
+      const wethBal = await dt.sepolia.getTokenBalance(addresses.SEPOLIA_WETH)
+      console.log('[Sepolia] WETH balance: ' + wethBal)
+
+      // Swap WETH -> USDC
+      if (parseFloat(wethBal) >= 0.001) {
+        console.log('[Sepolia] Selling 0.001 WETH -> USDC...')
+        const r = await dt.sepolia.uniswapV3.swap({
+          tokenIn: 'WETH', tokenOut: 'USDC', amountIn: '0.001'
+        })
+        console.log('[Sepolia] Got ' + r.amountOut + ' USDC')
+        console.log('[Sepolia] TX: ' + r.explorerUrl)
+      }
+    } catch (e) {
+      console.log('[Sepolia] ' + e.message)
+    }
+  } else {
+    console.log('[Sepolia] Skipped — chain not configured')
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // PART 2: Binance CEX Trades
+  // ═══════════════════════════════════════════════════════════
+  console.log('\\n══════════ PART 2: Binance CEX ══════════')
+  if (dt.binance) {
+    try {
+      // Market buy ETH
+      console.log('[Binance] Market BUY 0.01 ETH...')
+      const buy = await dt.binance.buy({
+        symbol: 'ETHUSDT', type: 'MARKET', quantity: 0.01
+      })
+      const buyPrice = (parseFloat(buy.cummulativeQuoteQty) / parseFloat(buy.executedQty)).toFixed(2)
+      console.log('[Binance] Bought ' + buy.executedQty + ' ETH @ $' + buyPrice + ' | Order: ' + buy.orderId)
+
+      await sleep(1000)
+
+      // Market sell ETH
+      console.log('[Binance] Market SELL 0.01 ETH...')
+      const sell = await dt.binance.sell({
+        symbol: 'ETHUSDT', type: 'MARKET', quantity: 0.01
+      })
+      const sellPrice = (parseFloat(sell.cummulativeQuoteQty) / parseFloat(sell.executedQty)).toFixed(2)
+      console.log('[Binance] Sold ' + sell.executedQty + ' ETH @ $' + sellPrice + ' | Order: ' + sell.orderId)
+    } catch (e) {
+      console.log('[Binance] ' + e.message)
+    }
+  } else {
+    console.log('[Binance] Skipped — not connected')
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // PART 3: V4 Hook Demo on Unichain Sepolia
+  // ═══════════════════════════════════════════════════════════
+  console.log('\\n══════════ PART 3: V4 Hooks (Unichain Sepolia) ══════════')
+  const ucExplorer = addresses['unichain-sepolia'].blockExplorer
+  const chain = dt['unichain-sepolia']
+  if (chain && chain.uniswapV4) {
+    const v4 = chain.uniswapV4
+    console.log('Hook:     ' + ucExplorer + '/address/' + addresses.UNICHAIN_SEPOLIA_HOOK)
+    console.log('Registry: ' + ucExplorer + '/address/' + addresses.UNICHAIN_SEPOLIA_POOL_REGISTRY)
+
+    // Pool Discovery
+    try {
+      const pools = await v4.getPools()
+      console.log('\\n[Pools] Found ' + pools.length + ' registered pool(s)')
+      for (const p of pools) {
+        console.log('  ' + p.name + ' | tickSpacing=' + p.tickSpacing + ' | active=' + p.active)
+      }
+    } catch (e) { console.log('[Pools] ' + e.message) }
+
+    // Pool State
+    let currentTick = 0
+    try {
+      const pool = await v4.getPoolInfo('WETH', 'USDC')
+      currentTick = pool.currentTick
+      console.log('\\n[State] tick=' + pool.currentTick + ' fee=' + pool.fee + 'bps liquidity=' + pool.liquidity)
+    } catch (e) { console.log('[State] ' + e.message) }
+
+    // Swap
+    try {
+      console.log('\\n[Swap] 0.0001 WETH -> USDC via V4...')
+      const swap = await v4.swap({
+        tokenIn: 'WETH', tokenOut: 'USDC', amountIn: '0.0001', slippage: 50
+      })
+      console.log('[Swap] Got ' + swap.amountOut + ' USDC')
+      console.log('[Swap] TX: ' + ucExplorer + '/tx/' + swap.txHash)
+    } catch (e) { console.log('[Swap] ' + e.message) }
+
+    // Limit Order
+    const limitTick = currentTick - 60 || -60
+    try {
+      console.log('\\n[Limit] Placing sell 0.0001 WETH at tick ' + limitTick + '...')
+      const limit = await v4.limitOrder({
+        tokenIn: 'WETH', tokenOut: 'USDC',
+        amountIn: '0.0001', tick: limitTick, deadline: 86400
+      })
+      console.log('[Limit] Order ' + limit.orderId + ' placed')
+      console.log('[Limit] TX: ' + ucExplorer + '/tx/' + limit.txHash)
+    } catch (e) { console.log('[Limit] ' + e.message) }
+
+    // Stop-Loss
+    const stopTick = currentTick - 120 || -120
+    try {
+      console.log('\\n[Stop] Placing stop-loss at tick ' + stopTick + '...')
+      const stop = await v4.stopOrder({
+        tokenIn: 'WETH', tokenOut: 'USDC',
+        amountIn: '0.0001', tick: stopTick
+      })
+      console.log('[Stop] Order ' + stop.orderId + ' placed')
+      console.log('[Stop] TX: ' + ucExplorer + '/tx/' + stop.txHash)
+    } catch (e) { console.log('[Stop] ' + e.message) }
+
+    // Bracket (OCO)
+    const tpTick = currentTick + 60 || 60
+    const slTick = currentTick - 120 || -120
+    try {
+      console.log('\\n[Bracket] TP tick=' + tpTick + ' SL tick=' + slTick + '...')
+      const bracket = await v4.bracketOrder({
+        tokenIn: 'WETH', tokenOut: 'USDC',
+        amountIn: '0.0001', limitTick: tpTick, stopTick: slTick, deadline: 86400
+      })
+      console.log('[Bracket] TP=' + bracket.limitOrderId + ' SL=' + bracket.stopOrderId)
+      console.log('[Bracket] TX: ' + ucExplorer + '/tx/' + bracket.txHash)
+    } catch (e) { console.log('[Bracket] ' + e.message) }
+
+    // View Orders
+    try {
+      const orders = await v4.getMyHookOrders()
+      console.log('\\n[Orders] ' + orders.length + ' total, ' + orders.filter(o => o.status === 'pending').length + ' pending')
+    } catch (e) { console.log('[Orders] ' + e.message) }
+  } else {
+    console.log('[V4] Skipped — Unichain Sepolia not configured')
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // PART 4: Cross-Venue PnL Summary
+  // ═══════════════════════════════════════════════════════════
+  console.log('\\n══════════ PART 4: Portfolio PnL ══════════')
+  try {
+    const pnl = dt.pnl.getTotal()
+    console.log('Realized PnL:   $' + pnl.totalRealizedPnl.toFixed(4))
+    console.log('Unrealized PnL: $' + (pnl.totalUnrealizedPnl || 0).toFixed(4))
+    console.log('Positions:      ' + (pnl.positionCount || 'N/A'))
+  } catch (e) { console.log('[PnL] ' + e.message) }
+
+  console.log('\\n╔══════════════════════════════════════════════════════╗')
+  console.log('║  Combined demo complete! All 4 parts executed.       ║')
+  console.log('║  Click any TX link above to verify on-chain.         ║')
+  console.log('╚══════════════════════════════════════════════════════╝')
+}`}
+          />
         </>
       )
 
@@ -487,6 +852,191 @@ Binance: Connected
   if (dt.binanceFutures) await dt.binanceFutures.getMarkPrice('ETHUSDT')
   if (dt.binanceOptions) await dt.binanceOptions.getMarkPrice('ETH-260328-4000-C')
   if (dt.base?.aave) await dt.base.aave.getUserAccountData()
+}`}
+          />
+        </>
+      )
+
+    case 'addresses-reference':
+      return (
+        <>
+          <DocHeader title="Addresses Reference" subtitle="Token & contract addresses for strategies" />
+          <p className="text-xs text-text-secondary leading-relaxed mb-3">
+            The <Code>addresses</Code> global is available in every strategy. It contains all token and contract
+            addresses across all supported chains. Two access patterns: <strong>flat</strong> (uppercase keys like{' '}
+            <Code>addresses.UNICHAIN_SEPOLIA_WETH</Code>) and <strong>structured</strong> (nested like{' '}
+            <Code>{'addresses[\'unichain-sepolia\'].tokens.WETH'}</Code>).
+          </p>
+
+          <h3 className="text-sm font-semibold mt-6 mb-2">Usage</h3>
+          <CodeBlock
+            title="How to use addresses in strategies"
+            code={`async function execute(dt) {
+  // Flat access — quick lookups
+  const hookAddr = addresses.UNICHAIN_SEPOLIA_HOOK
+  const wethAddr = addresses.ETHEREUM_WETH
+
+  // Structured access — iterate or get metadata
+  const chain = addresses['unichain-sepolia']
+  console.log(chain.name)           // 'Unichain Sepolia Testnet'
+  console.log(chain.chainId)        // 1301
+  console.log(chain.blockExplorer)  // 'https://sepolia.uniscan.xyz'
+  console.log(chain.tokens.WETH)    // '0x4200...'
+  console.log(chain.uniswapV4.megaQuantHook)  // '0xB591...'
+
+  // Use raw address in Aave calls
+  await dt.base.aave.supply({
+    asset: addresses.BASE_USDC,  // '0x8335...'
+    assetSymbol: 'USDC',
+    amount: '1000'
+  })
+}`}
+          />
+
+          <h3 className="text-sm font-semibold mt-6 mb-2">MegaQuant Custom Contracts (Unichain Sepolia)</h3>
+          <DocTable
+            headers={['Contract', 'Address']}
+            rows={[
+              ['MegaQuantHook', '0xB591b5096dA183Fa8d2F4C916Dcb0B4904f6f0c0'],
+              ['MegaQuantRouter', '0x608AEfA1DFD3621554a948E20159eB243C76235F'],
+              ['PoolRegistry', '0x680762A631334098eeF5F24EAAafac0F07Cb2e3a'],
+            ]}
+          />
+          <p className="text-2xs text-text-tertiary mt-1">
+            Flat keys: <Code>addresses.UNICHAIN_SEPOLIA_HOOK</Code>, <Code>addresses.UNICHAIN_SEPOLIA_ROUTER</Code>, <Code>addresses.UNICHAIN_SEPOLIA_POOL_REGISTRY</Code>
+          </p>
+
+          <h3 className="text-sm font-semibold mt-6 mb-2">Uniswap V4 PoolManager</h3>
+          <DocTable
+            headers={['Chain', 'Address']}
+            rows={[
+              ['Ethereum', '0x000000000004444c5dc75cB358380D2e3dE08A90'],
+              ['Base', '0x498581ff718922c3f8e6a244956af099b2652b2b'],
+              ['Unichain', '0x1f98400000000000000000000000000000000004'],
+              ['Unichain Sepolia', '0x00b036b58a818b1bc34d502d3fe730db729e62ac'],
+              ['Sepolia', '0xE03A1074c86CFeDd5C142C4F04F1a1536e203543'],
+              ['Base Sepolia', '0x05E73354cFDd6745C338b50BcFDfA3Aa6fA03408'],
+            ]}
+          />
+          <p className="text-2xs text-text-tertiary mt-1">
+            Flat key pattern: <Code>{'addresses.<CHAIN>_POOL_MANAGER'}</Code>
+          </p>
+
+          <h3 className="text-sm font-semibold mt-6 mb-2">Aave V3 Pool</h3>
+          <DocTable
+            headers={['Chain', 'Address']}
+            rows={[
+              ['Ethereum', '0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2'],
+              ['Base', '0xA238Dd80C259a72e81d7e4664a9801593F98d1c5'],
+            ]}
+          />
+          <p className="text-2xs text-text-tertiary mt-1">
+            Flat key pattern: <Code>{'addresses.<CHAIN>_AAVE_POOL'}</Code>
+          </p>
+
+          <p className="text-xs text-text-secondary leading-relaxed mt-6 mb-2">
+            <strong>Flat key pattern for tokens:</strong> <Code>{'addresses.<CHAIN>_<SYMBOL>'}</Code> — e.g.{' '}
+            <Code>addresses.ETHEREUM_WETH</Code>, <Code>addresses.BASE_USDC</Code>
+          </p>
+
+          <h3 className="text-sm font-semibold mt-6 mb-2">Ethereum (Chain ID: 1)</h3>
+          <DocTable
+            headers={['Symbol', 'Address', 'Dec']}
+            rows={[
+              ['WETH', '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2', '18'],
+              ['USDC', '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', '6'],
+              ['USDT', '0xdAC17F958D2ee523a2206206994597C13D831ec7', '6'],
+              ['WBTC', '0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599', '8'],
+              ['DAI', '0x6B175474E89094C44Da98b954EedeAC495271d0F', '18'],
+              ['LINK', '0x514910771AF9Ca656af840dff83E8264EcF986CA', '18'],
+              ['UNI', '0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984', '18'],
+              ['AAVE', '0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9', '18'],
+              ['STETH', '0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84', '18'],
+              ['WSTETH', '0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0', '18'],
+            ]}
+          />
+
+          <h3 className="text-sm font-semibold mt-6 mb-2">Base (Chain ID: 8453)</h3>
+          <DocTable
+            headers={['Symbol', 'Address', 'Dec']}
+            rows={[
+              ['WETH', '0x4200000000000000000000000000000000000006', '18'],
+              ['USDC', '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', '6'],
+              ['USDT', '0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2', '6'],
+              ['DAI', '0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb', '18'],
+              ['WBTC', '0x0555E30da8f98308EdB960aa94C0Db47230d2B9c', '8'],
+              ['LINK', '0x88Fb150BDc53A65fe94Dea0c9BA0a6dAf8C6e196', '18'],
+              ['AAVE', '0x63706e401c06ac8513145b7687A14804d17f814b', '18'],
+            ]}
+          />
+
+          <h3 className="text-sm font-semibold mt-6 mb-2">Unichain (Chain ID: 130)</h3>
+          <DocTable
+            headers={['Symbol', 'Address', 'Dec']}
+            rows={[
+              ['WETH', '0x4200000000000000000000000000000000000006', '18'],
+              ['USDC', '0x078D782b760474a361dDA0AF3839290b0EF57AD6', '6'],
+              ['USDT', '0x588CE4F028D8e7B53B687865d6A67b3A54C75518', '6'],
+              ['UNI', '0x8f187aA05619a017077f5308904739877ce9eA21', '18'],
+              ['WBTC', '0x0555E30da8f98308EdB960aa94C0Db47230d2B9c', '8'],
+              ['LINK', '0xEF66491eab4bbB582c57b14778afd8dFb70D8A1A', '18'],
+            ]}
+          />
+
+          <h3 className="text-sm font-semibold mt-6 mb-2">Unichain Sepolia (Chain ID: 1301)</h3>
+          <DocTable
+            headers={['Symbol', 'Address', 'Dec']}
+            rows={[
+              ['WETH', '0x4200000000000000000000000000000000000006', '18'],
+              ['USDC', '0x31d0220469e10c4E71834a79b1f276d740d3768F', '6'],
+              ['USDT', '0x3C5000e61F0A10acD0c826e09b90ddeF5AbFc3b5', '6'],
+            ]}
+          />
+
+          <h3 className="text-sm font-semibold mt-6 mb-2">Sepolia (Chain ID: 11155111)</h3>
+          <DocTable
+            headers={['Symbol', 'Address', 'Dec']}
+            rows={[
+              ['WETH', '0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14', '18'],
+              ['USDC', '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238', '6'],
+              ['USDT', '0x7169D38820dfd117C3FA1f22a697dBA58d90BA06', '6'],
+              ['DAI', '0x68194a729C2450ad26072b3D33ADaCbcef39D574', '18'],
+            ]}
+          />
+
+          <h3 className="text-sm font-semibold mt-6 mb-2">Base Sepolia (Chain ID: 84532)</h3>
+          <DocTable
+            headers={['Symbol', 'Address', 'Dec']}
+            rows={[
+              ['WETH', '0x4200000000000000000000000000000000000006', '18'],
+              ['USDC', '0x036CbD53842c5426634e7929541eC2318f3dCF7e', '6'],
+              ['USDT', '0x637B07e1a2D4E84d9aA9fB87bA3acf9D4DA55619', '6'],
+              ['DAI', '0xB8e007e0FD81b28087f29fE4e9C5E14B0B830183', '18'],
+            ]}
+          />
+
+          <h3 className="text-sm font-semibold mt-6 mb-2">Structured Access Pattern</h3>
+          <CodeBlock
+            title="Nested access via addresses[chainName]"
+            code={`// Each chain object has:
+addresses['unichain-sepolia'] = {
+  chainId: 1301,
+  name: 'Unichain Sepolia Testnet',
+  blockExplorer: 'https://sepolia.uniscan.xyz',
+  tokens: {
+    WETH: '0x4200000000000000000000000000000000000006',
+    USDC: '0x31d0220469e10c4E71834a79b1f276d740d3768F',
+    USDT: '0x3C5000e61F0A10acD0c826e09b90ddeF5AbFc3b5'
+  },
+  uniswapV3: { router, quoter, factory, nftPositionManager },
+  uniswapV4: {
+    poolManager: '0x00b036b58a818b1bc34d502d3fe730db729e62ac',
+    megaQuantHook: '0xB591b5096dA183Fa8d2F4C916Dcb0B4904f6f0c0',
+    megaQuantRouter: '0x608AEfA1DFD3621554a948E20159eB243C76235F',
+    poolRegistry: '0x680762A631334098eeF5F24EAAafac0F07Cb2e3a',
+    positionManager, universalRouter, quoter, stateView
+  },
+  aaveV3: null  // not available on this chain
 }`}
           />
         </>
@@ -729,55 +1279,105 @@ Binance: Connected
           <DocHeader title="Uniswap V4" subtitle="dt.<network>.uniswapV4" />
           <p className="text-xs text-text-secondary leading-relaxed mb-3">
             Next-gen AMM with MegaQuantHook integration. Supports <strong>volatility-adjusted
-            dynamic fees</strong> and <strong>on-chain limit orders</strong> (see V4 Hooks section).
+            dynamic fees</strong>, <strong>on-chain limit orders</strong>, <strong>stop-loss orders</strong>,
+            <strong> bracket (OCO) orders</strong>, and <strong>TWAP execution</strong>. Hook and router
+            addresses are auto-resolved from chain config — no manual address params needed.
+            See V4 Hooks section for full architecture.
           </p>
           <ApiMethod
             name="swap"
-            description="Execute a swap via MegaQuantRouter. Fee is dynamically adjusted based on pool volatility (0.05% - 1.0%)."
+            description="Execute a swap via V4 PoolManager. The hook's beforeSwap() overrides the fee with a volatility-based dynamic fee (0.05% - 1.0%)."
             params={[
               { name: 'tokenIn', type: 'string', desc: 'Input token symbol' },
               { name: 'tokenOut', type: 'string', desc: 'Output token symbol' },
               { name: 'amountIn', type: 'string', desc: 'Input amount' },
               { name: 'slippage', type: 'number?', desc: 'Max slippage %' },
             ]}
-            returns="SwapResult"
-            example={`const result = await dt.ethereum.uniswapV4.swap({
-  tokenIn: 'WETH', tokenOut: 'USDC', amountIn: '1.0'
-})`}
+            returns="SwapResult { success, txHash, amountIn, amountOut, explorerUrl }"
+            example={`const result = await dt['unichain-sepolia'].uniswapV4.swap({
+  tokenIn: 'USDC', tokenOut: 'WETH', amountIn: '100', slippage: 0.5
+})
+console.log('Got', result.amountOut, 'WETH')
+console.log('TX:', result.txHash)`}
           />
           <ApiMethod
             name="limitOrder"
-            description="Place an on-chain limit order at a specific tick via MegaQuantRouter. Tokens are deposited into the hook contract and you receive ERC1155 claim tokens. The order fills automatically when another user's swap crosses your tick. See V4 Hooks > Limit Orders for details."
+            description="Place an on-chain limit order at a specific tick. Tokens are deposited into the hook contract and you receive ERC1155 claim tokens. The order fills automatically when a swap crosses your tick (via afterSwap). Hook and router addresses are auto-resolved."
             params={[
               { name: 'tokenIn', type: 'string', desc: 'Input token symbol (e.g. "WETH")' },
               { name: 'tokenOut', type: 'string', desc: 'Output token symbol (e.g. "USDC")' },
               { name: 'amountIn', type: 'string', desc: 'Order amount in input token' },
-              { name: 'targetPrice', type: 'string', desc: 'Target price for the order' },
               { name: 'tick', type: 'number', desc: 'Target tick (~0.01% per tick). Like a price level on an order book.' },
+              { name: 'targetPrice', type: 'string?', desc: 'Target price (informational, for DB record)' },
               { name: 'deadline', type: 'number?', desc: 'Seconds until expiry (default: 86400)' },
             ]}
-            returns="{ success, orderId, txHash, tick, amountIn, targetPrice, deadline }"
-            example={`const order = await dt.ethereum.uniswapV4.limitOrder({
-  tokenIn: 'WETH',
-  tokenOut: 'USDC',
-  amountIn: '1.0',
-  targetPrice: '2000',
-  tick: -200400,
-  deadline: 3600
-}, megaQuantRouterAddress)
-console.log('Order ID:', order.orderId, 'Tx:', order.txHash)`}
+            returns="{ success, orderId, txHash, tick, amountIn, deadline }"
+            example={`const order = await dt['unichain-sepolia'].uniswapV4.limitOrder({
+  tokenIn: 'WETH', tokenOut: 'USDC',
+  amountIn: '0.5', tick: 200250, deadline: 86400
+})
+console.log('Order:', order.orderId)
+console.log('TX:', order.txHash)  // click to view on block explorer`}
+          />
+          <ApiMethod
+            name="stopOrder"
+            description="Place an on-chain stop-loss order. Triggers when the price drops past the stop tick. Stored in a separate mapping (pendingStopOrders) from limit orders. afterSwap() checks stops when price moves in the trigger direction."
+            params={[
+              { name: 'tokenIn', type: 'string', desc: 'Token to sell when stop triggers' },
+              { name: 'tokenOut', type: 'string', desc: 'Token to receive' },
+              { name: 'amountIn', type: 'string', desc: 'Amount to sell' },
+              { name: 'tick', type: 'number', desc: 'Trigger tick (below current for long stop-loss)' },
+              { name: 'deadline', type: 'number?', desc: 'Seconds until expiry (0 = no expiry)' },
+            ]}
+            returns="{ success, orderId, txHash, tick, amountIn }"
+            example={`const stop = await dt['unichain-sepolia'].uniswapV4.stopOrder({
+  tokenIn: 'WETH', tokenOut: 'USDC',
+  amountIn: '0.5', tick: 200190
+})
+console.log('Stop-loss:', stop.orderId)
+console.log('TX:', stop.txHash)  // auto-sells if price drops past tick`}
+          />
+          <ApiMethod
+            name="bracketOrder"
+            description="Place a bracket (OCO) order — a linked take-profit limit + stop-loss. When one side fills, the hook's afterSwap() auto-cancels the other. Both orders are placed in a single tx via the router's placeBracketOrder()."
+            params={[
+              { name: 'tokenIn', type: 'string', desc: 'Token to sell' },
+              { name: 'tokenOut', type: 'string', desc: 'Token to receive' },
+              { name: 'amountIn', type: 'string', desc: 'Amount per side (total cost = 2x)' },
+              { name: 'limitTick', type: 'number', desc: 'Take-profit tick (above current)' },
+              { name: 'stopTick', type: 'number', desc: 'Stop-loss tick (below current)' },
+              { name: 'deadline', type: 'number?', desc: 'Seconds until expiry' },
+            ]}
+            returns="{ success, limitOrderId, stopOrderId, txHash, limitTick, stopTick }"
+            example={`const bracket = await dt['unichain-sepolia'].uniswapV4.bracketOrder({
+  tokenIn: 'WETH', tokenOut: 'USDC',
+  amountIn: '0.5', limitTick: 200370, stopTick: 200190, deadline: 86400
+})
+console.log('TP:', bracket.limitOrderId, 'SL:', bracket.stopOrderId)
+console.log('TX:', bracket.txHash)  // both orders in one tx`}
           />
           <ApiMethod
             name="cancelLimitOrder"
-            description="Cancel a pending limit order and reclaim deposited tokens. Calls hook.cancelOrder directly — wallet must hold the ERC1155 claim tokens."
+            description="Cancel a pending limit order and reclaim deposited tokens. Burns ERC1155 claim tokens. Hook address is auto-resolved from chain config."
             params={[
               { name: 'tokenIn', type: 'string', desc: 'Input token symbol' },
               { name: 'tokenOut', type: 'string', desc: 'Output token symbol' },
               { name: 'tick', type: 'number', desc: 'Tick of the order to cancel' },
-              { name: 'hookAddress', type: 'string', desc: 'MegaQuantHook contract address' },
             ]}
             returns="{ success: boolean, txHash: string }"
-            example={`await dt.ethereum.uniswapV4.cancelLimitOrder('WETH', 'USDC', -200400, hookAddress)`}
+            example={`const result = await dt['unichain-sepolia'].uniswapV4.cancelLimitOrder('WETH', 'USDC', 200250)
+console.log('Cancelled, TX:', result.txHash)`}
+          />
+          <ApiMethod
+            name="cancelStopOrder"
+            description="Cancel a pending stop-loss order and reclaim deposited tokens."
+            params={[
+              { name: 'tokenIn', type: 'string', desc: 'Input token symbol' },
+              { name: 'tokenOut', type: 'string', desc: 'Output token symbol' },
+              { name: 'tick', type: 'number', desc: 'Tick of the stop order to cancel' },
+            ]}
+            returns="{ success: boolean, txHash: string }"
+            example={`await dt['unichain-sepolia'].uniswapV4.cancelStopOrder('WETH', 'USDC', 200190)`}
           />
           <ApiMethod
             name="redeemLimitOrder"
@@ -787,35 +1387,90 @@ console.log('Order ID:', order.orderId, 'Tx:', order.txHash)`}
               { name: 'tokenOut', type: 'string', desc: 'Original output token symbol' },
               { name: 'tick', type: 'number', desc: 'Tick where the order was placed' },
               { name: 'amount', type: 'string', desc: 'Amount of claim tokens to redeem' },
-              { name: 'hookAddress', type: 'string', desc: 'MegaQuantHook contract address' },
             ]}
             returns="{ success: boolean, txHash: string }"
-            example={`await dt.ethereum.uniswapV4.redeemLimitOrder('WETH', 'USDC', -200400, '1.0', hookAddress)`}
+            example={`await dt['unichain-sepolia'].uniswapV4.redeemLimitOrder('WETH', 'USDC', -200400, '1.0')`}
+          />
+          <ApiMethod
+            name="getMyHookOrders"
+            description="Get all hook orders (limit, stop, bracket) for this strategy from the database. Status is auto-updated by the HookOrderListener when on-chain fills are detected."
+            params={[]}
+            returns="Array<{ id, orderType, side, tokenIn, tokenOut, amountIn, tick, status, hookOrderId, linkedOrderId?, createdAt }>"
+            example={`const orders = await dt['unichain-sepolia'].uniswapV4.getMyHookOrders()
+for (const o of orders) {
+  console.log(o.orderType, o.side, 'tick=' + o.tick, o.status)
+}`}
+          />
+          <ApiMethod
+            name="getPoolInfo"
+            description="Read live pool state from the V4 PoolManager: current tick, sqrtPriceX96, liquidity, and the current dynamic fee."
+            params={[
+              { name: 'tokenA', type: 'string', desc: 'First token symbol' },
+              { name: 'tokenB', type: 'string', desc: 'Second token symbol' },
+            ]}
+            returns="{ poolId, currentTick, sqrtPriceX96, liquidity, fee, feePercentage }"
+            example={`const pool = await dt['unichain-sepolia'].uniswapV4.getPoolInfo('WETH', 'USDC')
+console.log('Tick:', pool.currentTick, 'Fee:', pool.feePercentage)`}
+          />
+          <ApiMethod
+            name="getPools"
+            description="Query the PoolRegistry contract for all registered MegaQuant pools."
+            params={[]}
+            returns="Array<{ poolId, token0, token1, tickSpacing, creator, name, active }>"
+            example={`const pools = await dt['unichain-sepolia'].uniswapV4.getPools()
+console.log('Found', pools.length, 'pools')`}
+          />
+          <ApiMethod
+            name="getVolatilityFee"
+            description="Read the current volatility-adjusted fee for a pool. Fee is calculated from EWMA variance of recent tick movements (0.05% to 1.0%). Hook address is auto-resolved."
+            params={[
+              { name: 'tokenA', type: 'string', desc: 'First token symbol' },
+              { name: 'tokenB', type: 'string', desc: 'Second token symbol' },
+            ]}
+            returns="{ fee: number, feePercentage: string }"
+            example={`const { fee, feePercentage } = await dt['unichain-sepolia'].uniswapV4.getVolatilityFee('WETH', 'USDC')
+console.log('Fee:', fee, 'bps (' + feePercentage + ')')`}
+          />
+          <ApiMethod
+            name="twap"
+            description="Start a TWAP (Time-Weighted Average Price) execution. Splits a large order into smaller slices executed at regular intervals to reduce price impact. Runs as a backend keeper service."
+            params={[
+              { name: 'tokenIn', type: 'string', desc: 'Input token symbol' },
+              { name: 'tokenOut', type: 'string', desc: 'Output token symbol' },
+              { name: 'totalAmount', type: 'string', desc: 'Total amount to swap' },
+              { name: 'durationMs', type: 'number', desc: 'Total duration in milliseconds' },
+              { name: 'numSlices', type: 'number', desc: 'Number of slices' },
+              { name: 'maxSlippage', type: 'number?', desc: 'Max slippage per slice in bps (default: 50)' },
+            ]}
+            returns="{ twapId, status, slicesTotal, intervalMs }"
+            example={`const twap = await dt['unichain-sepolia'].uniswapV4.twap({
+  tokenIn: 'USDC', tokenOut: 'WETH',
+  totalAmount: '10000', durationMs: 3600000, numSlices: 12, maxSlippage: 50
+})
+console.log('TWAP started:', twap.twapId, twap.slicesTotal, 'slices')`}
+          />
+          <ApiMethod
+            name="getTwapStatus / cancelTwap"
+            description="Check TWAP progress or cancel remaining slices."
+            params={[
+              { name: 'twapId', type: 'string', desc: 'TWAP ID returned by twap()' },
+            ]}
+            returns="TwapStatus { twapId, status, slicesExecuted, slicesTotal, totalAmountOut }"
+            example={`const status = await dt['unichain-sepolia'].uniswapV4.getTwapStatus(twapId)
+console.log(status.slicesExecuted + '/' + status.slicesTotal + ' slices done')
+await dt['unichain-sepolia'].uniswapV4.cancelTwap(twapId)  // cancel remaining`}
           />
           <ApiMethod
             name="batchSwap"
             description="Execute multiple swaps in a single transaction via MegaQuantRouter. All swaps share one unlock() call, saving gas through V4's flash accounting."
             params={[
-              { name: 'swaps', type: 'Array', desc: 'Array of { tokenIn, tokenOut, amountIn, fee?, hookAddress? }' },
-              { name: 'routerAddress', type: 'string', desc: 'MegaQuantRouter contract address' },
+              { name: 'swaps', type: 'Array', desc: 'Array of { tokenIn, tokenOut, amountIn }' },
             ]}
             returns="Array<{ amountIn, tokenIn, tokenOut, success }>"
-            example={`const results = await dt.ethereum.uniswapV4.batchSwap([
+            example={`const results = await dt['unichain-sepolia'].uniswapV4.batchSwap([
   { tokenIn: 'WETH', tokenOut: 'USDC', amountIn: '1.0' },
   { tokenIn: 'WETH', tokenOut: 'DAI', amountIn: '0.5' },
-], megaQuantRouterAddress)`}
-          />
-          <ApiMethod
-            name="getVolatilityFee"
-            description="Read the current volatility-adjusted fee for a pool. Calls hook.getPoolFee(poolId). Fee is calculated from EWMA variance of recent tick movements (0.05% to 1.0%)."
-            params={[
-              { name: 'tokenA', type: 'string', desc: 'First token symbol' },
-              { name: 'tokenB', type: 'string', desc: 'Second token symbol' },
-              { name: 'hookAddress', type: 'string', desc: 'MegaQuantHook contract address' },
-            ]}
-            returns="{ fee: number, feePercentage: string }"
-            example={`const { fee, feePercentage } = await dt.ethereum.uniswapV4.getVolatilityFee('WETH', 'USDC', hookAddress)
-console.log('Current fee:', fee, 'bps (', feePercentage, ')')`}
+])`}
           />
         </>
       )
@@ -1126,32 +1781,31 @@ console.log('Price:', data.price, 'Updated:', new Date(data.updatedAt * 1000))`}
     case 'order-hook':
       return (
         <>
-          <DocHeader title="V4 Hook Order Lifecycle" subtitle="On-chain limit orders" />
+          <DocHeader title="V4 Hook Order Lifecycle" subtitle="Limit, stop, and bracket orders" />
           <p className="text-xs text-text-secondary leading-relaxed mb-3">
-            V4 Hook limit orders are <strong>on-chain resting limit orders</strong>, similar to a
-            resting order on an ECN, executed by natural flow. No off-chain infrastructure needed.
-            See V4 Hooks section for full architecture.
+            V4 Hook orders are <strong>on-chain resting orders</strong> — limit, stop-loss, and bracket (OCO) —
+            executed by natural swap flow. No off-chain keeper needed.
+            Hook and router addresses are auto-resolved. See V4 Hooks section for full architecture.
           </p>
           <CodeBlock
-            title="V4 Hook Limit Order Flow"
-            code={`dt.ethereum.uniswapV4.limitOrder({ tokenIn, tokenOut, amountIn, targetPrice, tick }, routerAddress)
-  │
-  ├─ [1] Tokens transferred to hook contract via MegaQuantRouter
-  │       → status=PENDING, protocol=uniswap-v4-hook
-  │       → ERC1155 claim tokens minted to user (your order receipt)
-  │
-  ├─ [2a] Another user's swap crosses your tick
-  │        → afterSwap() hook auto-executes your order
-  │        → status=FILLED
-  │        → User calls redeemLimitOrder() to withdraw output tokens
-  │
-  ├─ [2b] User cancels: dt.ethereum.uniswapV4.cancelLimitOrder(tokenIn, tokenOut, tick, hookAddress)
-  │        → Input tokens returned, claim tokens burned
-  │        → status=CANCELLED
-  │
-  └─ [2c] Deadline expires
-           → Order can still be cancelled by user
-           → Does NOT auto-cancel (would require gas)`}
+            title="V4 Hook Order Flows"
+            code={`LIMIT ORDER: v4.limitOrder({ tokenIn, tokenOut, amountIn, tick, deadline })
+  ├─ [1] Tokens → hook contract, ERC1155 claim tokens → user
+  │       status=PENDING, protocol=uniswap-v4-hook
+  ├─ [2a] Swap crosses tick → afterSwap() auto-fills → status=FILLED
+  ├─ [2b] User cancels: v4.cancelLimitOrder(tokenIn, tokenOut, tick)
+  │        → tokens returned, claim tokens burned → status=CANCELLED
+  └─ [2c] Redeem: v4.redeemLimitOrder(...) → withdraw output tokens
+
+STOP ORDER: v4.stopOrder({ tokenIn, tokenOut, amountIn, tick })
+  ├─ Same lifecycle as limit, but triggers in OPPOSITE direction
+  ├─ Stored in pendingStopOrders (separate from limits)
+  └─ afterSwap() checks stops when tick moves past trigger
+
+BRACKET (OCO): v4.bracketOrder({ tokenIn, tokenOut, amountIn, limitTick, stopTick })
+  ├─ Places BOTH limit + stop in one tx via Router
+  ├─ Linked on-chain via bracketPartner mapping
+  └─ When one fills → afterSwap() auto-cancels the other side`}
           />
           <DocTable
             headers={['Property', 'Value']}
@@ -1185,17 +1839,18 @@ console.log('Price:', data.price, 'Updated:', new Date(data.updatedAt * 1000))`}
         <>
           <DocHeader title="Order Type Comparison" />
           <DocTable
-            headers={['', 'DEX Swap', 'CEX (Binance)', 'V4 Hook Limit']}
+            headers={['', 'DEX Swap', 'CEX (Binance)', 'V4 Hook Orders']}
             rows={[
               ['Cancellable', 'No', 'Yes (limit)', 'Yes'],
               ['Partial fills', 'No', 'Yes', 'No'],
               ['On-chain', 'Yes', 'No', 'Yes'],
-              ['Fees', 'Gas (~200k gas, recorded)', '0.1% commission (recorded)', 'Gas (~150k place + ~50k claim)'],
-              ['Order types', 'Market', 'Market, Limit, Stop', 'Limit (tick-based)'],
-              ['Execution', 'Immediate', 'Immediate/queued', 'Passive (other swaps)'],
+              ['Fees', 'Gas (~200k gas)', '0.1% commission', 'Gas (~150k place + ~50k claim)'],
+              ['Order types', 'Market', 'Market, Limit, Stop', 'Limit, Stop, Bracket (OCO), TWAP'],
+              ['Execution', 'Immediate', 'Immediate/queued', 'Passive (other swaps trigger fills)'],
               ['Price format', 'Slippage %', 'USD', 'Uniswap tick'],
               ['Custody', 'Non-custodial', 'Custodial', 'Non-custodial'],
               ['Settlement', '~2-24s on-chain', 'Instant (off-chain)', '~2-24s on-chain'],
+              ['OCO support', 'No', 'Manual', 'Native (bracketPartner on-chain)'],
             ]}
           />
           <h3 className="text-sm font-semibold mt-6 mb-2">Unified Order Table</h3>
@@ -1210,7 +1865,12 @@ console.log('Price:', data.price, 'Updated:', new Date(data.updatedAt * 1000))`}
   'uniswap-v4'       → DEX swap (V4 pools)
   '1inch'            → DEX aggregated swap
   'binance'          → CEX order
-  'uniswap-v4-hook'  → On-chain limit order via hook
+  'uniswap-v4-hook'  → On-chain hook order (limit, stop, bracket)
+
+orders.orderType (hook orders):
+  'limit'   → Limit order (fills when price crosses tick upward)
+  'stop'    → Stop-loss order (fills when price crosses tick downward)
+  Both types can be part of a bracket (linked via linkedOrderId)
 
 Status transitions:
   All venues:   PENDING → FILLED
@@ -1219,7 +1879,8 @@ Status transitions:
   CEX only:     PENDING → CANCELLED (user cancel)
   CEX only:     PENDING → EXPIRED (time-in-force)
   Hook only:    PENDING → FILLED → REDEEMED (claimed)
-  Hook only:    PENDING → CANCELLED (user cancel)`}
+  Hook only:    PENDING → CANCELLED (user cancel)
+  Hook only:    PENDING → CANCELLED (bracket partner filled)`}
           />
         </>
       )
@@ -1252,19 +1913,19 @@ beforeDonate / afterDonate          → Fee donations`}
           />
           <h3 className="text-sm font-semibold mt-6 mb-2">MegaQuantHook Contract</h3>
           <p className="text-xs text-text-secondary leading-relaxed mb-3">
-            Our hook combines two features: <strong>volatility-based dynamic fees</strong> (adjusts
-            pool fees based on EWMA variance of tick movements, 0.05% to 1.0%) and <strong>on-chain
-            limit orders</strong> (tick-based orders that execute via afterSwap).
+            Our hook combines: <strong>volatility-based dynamic fees</strong> (EWMA-adjusted, 0.05%-1.0%),
+            <strong> on-chain limit orders</strong>, <strong>stop-loss orders</strong>, and <strong>bracket
+            (OCO) orders</strong> — all executed via afterSwap. Plus <strong>TWAP</strong> via a backend keeper.
           </p>
           <CodeBlock
             title="Contract Architecture"
-            code={`MegaQuantHook.sol
+            code={`MegaQuantHook.sol (0xB591b509...f6f0c0 on Unichain Sepolia)
 ├── Inherits: BaseHook, ERC1155, ReentrancyGuard
 │
 ├── Volatility Fee System
 │   ├── VolatilityState per pool (lastTick, ewmaVariance, observationCount)
-│   ├── beforeSwap → returns dynamic fee (0.05% to 1.0%)
-│   └── afterSwap → updates EWMA variance
+│   ├── beforeSwap → computes EWMA fee, returns dynamic override
+│   └── afterSwap → updates EWMA variance from tick delta
 │
 ├── Limit Order System
 │   ├── pendingOrders[poolId][tick][zeroForOne] → aggregated amount
@@ -1272,11 +1933,35 @@ beforeDonate / afterDonate          → Fee donations`}
 │   ├── placeOrder() → deposit tokens, mint ERC1155 claim tokens
 │   ├── cancelOrder() → return tokens, burn claim tokens
 │   ├── redeem() → withdraw output, burn claim tokens
-│   └── afterSwap → _tryExecutingOrders() (up to 5 orders per swap)
+│   └── afterSwap → _tryExecutingOrders() (when tick crosses order)
 │
-└── Libraries
-    ├── VolatilityMath.sol → EWMA calculations
-    └── OrderLib.sol → Hook data encoding`}
+├── Stop-Loss Order System
+│   ├── pendingStopOrders[poolId][tick][zeroForOne] → aggregated amount
+│   ├── stopClaimableOutputTokens[stopId] → filled output
+│   ├── placeStopOrder() → deposit tokens, mint ERC1155 (different ID domain)
+│   ├── cancelStopOrder() → return tokens, burn claim tokens
+│   ├── redeemStopOrder() → withdraw output
+│   └── afterSwap → _tryExecutingStopOrders() (opposite direction to limits)
+│
+├── Bracket (OCO) System
+│   ├── bracketPartner[orderId] → partnerId (bidirectional link)
+│   ├── setBracketPartner() → links a limit + stop order pair
+│   └── _cancelBracketPartner() → called on fill, cancels other side
+│
+├── MegaQuantRouter.sol (0x608AEfA1...6235F)
+│   ├── placeLimitOrder() → wraps hook.placeOrder()
+│   ├── placeStopOrder() → wraps hook.placeStopOrder()
+│   └── placeBracketOrder() → places both + links via setBracketPartner()
+│
+├── PoolRegistry.sol (0x680762A6...8C2a)
+│   ├── createPool() → registers + optionally initializes on PoolManager
+│   ├── getPools(), getPoolsForPair() → discovery
+│   └── Stores: token pair, tickSpacing, creator, name, active flag
+│
+└── TWAP (backend keeper, not on-chain)
+    ├── TwapService → timer-based sliced swap execution
+    ├── Each slice = separate on-chain swap tx
+    └── cancelTwap() / getTwapStatus() for control`}
           />
         </>
       )
@@ -1324,6 +2009,144 @@ Step 3: REDEEM
   → Output calculated pro-rata: (yourClaim / totalClaim) × totalOutput
   → ERC1155 claim tokens burned
   → Output tokens transferred to you`}
+          />
+        </>
+      )
+
+    case 'v4-stop-orders':
+      return (
+        <>
+          <DocHeader title="Stop-Loss Orders" subtitle="On-chain stop orders via MegaQuantHook" />
+          <p className="text-xs text-text-secondary leading-relaxed mb-3">
+            Stop-loss orders trigger when the price moves <strong>against</strong> you — selling your
+            tokens automatically to limit losses. Unlike limit orders (which fill when price moves
+            <em> to</em> a target), stops fire when price moves <em>past</em> a threshold.
+          </p>
+          <CodeBlock
+            title="Stop Order vs Limit Order"
+            code={`Limit order at tick 200250:  "Sell my WETH when price RISES to tick 200250"
+  → afterSwap checks: did tick cross UPWARD past 200250?
+  → Stored in: pendingOrders mapping
+
+Stop order at tick 200190: "Sell my WETH when price DROPS to tick 200190"
+  → afterSwap checks: did tick cross DOWNWARD past 200190?
+  → Stored in: pendingStopOrders mapping (separate from limits)
+
+Order ID domain (no collisions):
+  limitId = keccak256(poolId, tick, zeroForOne)
+  stopId  = keccak256("STOP", poolId, tick, zeroForOne)`}
+          />
+          <CodeBlock
+            title="Place & Cancel Stop Orders"
+            code={`// Place a stop-loss: sell 0.5 WETH if price drops to tick -202200
+const stop = await v4.stopOrder({
+  tokenIn: 'WETH', tokenOut: 'USDC',
+  amountIn: '0.5', tick: 200190
+})
+console.log('Stop placed:', stop.orderId)
+console.log('TX:', stop.txHash)
+
+// Cancel and reclaim tokens
+const cancel = await v4.cancelStopOrder('WETH', 'USDC', 200190)
+console.log('Cancelled:', cancel.txHash)`}
+          />
+        </>
+      )
+
+    case 'v4-bracket-orders':
+      return (
+        <>
+          <DocHeader title="Bracket (OCO) Orders" subtitle="Linked take-profit + stop-loss" />
+          <p className="text-xs text-text-secondary leading-relaxed mb-3">
+            A bracket order places a <strong>take-profit</strong> (limit) and a <strong>stop-loss</strong> simultaneously,
+            linked on-chain via the <code className="bg-background px-1 py-0.5 rounded font-mono">bracketPartner</code> mapping.
+            When <em>either</em> side fills, the hook automatically cancels the other — this is the
+            classic <strong>OCO (One-Cancels-Other)</strong> from traditional trading, running fully on-chain.
+          </p>
+          <CodeBlock
+            title="Bracket Order Flow"
+            code={`1. Router.placeBracketOrder(key, tpTick, slTick, zeroForOne, amount, deadline)
+   ├─ Places limit order at tpTick (take-profit)
+   ├─ Places stop order at slTick (stop-loss)
+   ├─ Calls hook.setBracketPartner(limitId, stopId)
+   │   → bracketPartner[limitId] = stopId
+   │   → bracketPartner[stopId]  = limitId
+   └─ Transfers both ERC1155 claim tokens to caller
+
+2. Price rises past tpTick → limit order fills
+   ├─ afterSwap() executes the limit order
+   ├─ _cancelBracketPartner(limitId) is called
+   │   → Looks up partner: bracketPartner[limitId] = stopId
+   │   → Zeros out pendingStopOrders for the stop side
+   │   → Clears both bracketPartner links
+   └─ Stop-loss tokens returned to user
+
+3. OR: Price drops past slTick → stop order fills
+   └─ Same flow but in reverse — limit side gets cancelled`}
+          />
+          <CodeBlock
+            title="Place a Bracket Order"
+            code={`const bracket = await v4.bracketOrder({
+  tokenIn: 'WETH', tokenOut: 'USDC',
+  amountIn: '0.5',       // 0.5 WETH per side (total: 1.0 WETH deposited)
+  limitTick: 200370,      // Take profit (above current price)
+  stopTick: 200190,       // Stop loss (below current price)
+  deadline: 86400         // 24 hour expiry
+})
+console.log('Take-Profit ID:', bracket.limitOrderId)
+console.log('Stop-Loss ID:  ', bracket.stopOrderId)
+console.log('TX:', bracket.txHash)
+// When one fills, the other is auto-cancelled by the hook`}
+          />
+        </>
+      )
+
+    case 'v4-twap':
+      return (
+        <>
+          <DocHeader title="TWAP Execution" subtitle="Time-Weighted Average Price" />
+          <p className="text-xs text-text-secondary leading-relaxed mb-3">
+            TWAP splits a large order into smaller <strong>slices</strong> executed at regular intervals,
+            reducing price impact. Unlike limit/stop orders which run on-chain in the hook, TWAP runs
+            as a <strong>backend keeper service</strong> — each slice is a separate on-chain swap tx.
+          </p>
+          <CodeBlock
+            title="How TWAP Works"
+            code={`User calls: v4.twap({ totalAmount: '10000', durationMs: 3600000, numSlices: 12 })
+
+Backend TwapService:
+  ├─ Computes: intervalMs = 3600000 / 12 = 300000ms (5 min)
+  ├─ Computes: amountPerSlice = 10000 / 12 = 833.33 USDC
+  │
+  ├─ t=0:00   → v4.swap(833.33 USDC → WETH)  → tx 0xabc...
+  ├─ t=5:00   → v4.swap(833.33 USDC → WETH)  → tx 0xdef...
+  ├─ t=10:00  → v4.swap(833.33 USDC → WETH)  → tx 0x123...
+  │   ...
+  └─ t=55:00  → v4.swap(833.33 USDC → WETH)  → tx 0x789...
+
+Each slice is a real V4 swap with its own tx hash on-chain.
+Strategy can poll getTwapStatus() or cancelTwap() at any time.`}
+          />
+          <CodeBlock
+            title="Start, Monitor, and Cancel TWAP"
+            code={`// Start TWAP: buy WETH with 10000 USDC over 1 hour in 12 slices
+const twap = await v4.twap({
+  tokenIn: 'USDC', tokenOut: 'WETH',
+  totalAmount: '10000', durationMs: 3600000,
+  numSlices: 12, maxSlippage: 50  // 0.5% per slice
+})
+console.log('TWAP started:', twap.twapId)
+console.log('Slices:', twap.slicesTotal, '| Interval:', twap.intervalMs + 'ms')
+
+// Check progress
+await sleep(60000)
+const status = await v4.getTwapStatus(twap.twapId)
+console.log('Progress:', status.slicesExecuted + '/' + status.slicesTotal)
+console.log('Total received:', status.totalAmountOut, 'WETH')
+
+// Cancel remaining slices
+await v4.cancelTwap(twap.twapId)
+console.log('TWAP cancelled')`}
           />
         </>
       )
@@ -1379,38 +2202,55 @@ Redemption (pro-rata):
   1. Deploy MegaQuantHook.sol via CREATE2 (salt-mined address)
      → Address encodes hook permissions in least-significant bits
   2. Deploy MegaQuantRouter.sol
-     → Handles swap routing + limit order placement
-  3. Initialize pools with hook attached
-     → ETH/USDC, ETH/USDT, WBTC/USDC, etc.
+     → Handles swap routing, limit/stop/bracket order placement
+  3. Deploy PoolRegistry.sol
+     → On-chain registry for pool discovery
+  4. Initialize pools with hook attached
+     → USDC/WETH, etc.
 
 Users (via MEGA QUANT app):
-  → Place limit orders on existing pools
+  → Place limit, stop, and bracket (OCO) orders on existing pools
+  → Execute TWAP for large orders
   → Cancel pending orders
   → Redeem filled orders (claim output tokens)
-  → View order status in the Orders tab
+  → View order status in the Hooks tab
   → Users do NOT deploy contracts or create pools`}
           />
 
-          <h3 className="text-sm font-semibold mt-6 mb-2">PoolManager Addresses</h3>
+          <h3 className="text-sm font-semibold mt-6 mb-2">Deployed Addresses — Unichain Sepolia (1301)</h3>
           <DocTable
-            headers={['Chain', 'PoolManager Address', 'Status']}
+            headers={['Contract', 'Address', 'Notes']}
             rows={[
-              ['Ethereum', '0x00000000...4444c5dc75cB358380D2e3dE08A90', 'After testnet validation'],
-              ['Base', '0x498581ff...956af099b2652b2b', 'After testnet validation'],
-              ['Unichain', '0x1f984000...00000000000000004', 'After testnet validation'],
-              ['Sepolia', '0xE03A1074...1536e203543', 'Test deployment'],
-              ['Base Sepolia', '0x05E73354...6fA03408', 'Test deployment'],
-              ['Unichain Sepolia', '0xC81462Fe...a35C1A', 'Test deployment'],
+              ['PoolManager (Uniswap)', '0x00b036b58a818b1bc34d502d3fe730db729e62ac', 'Uniswap canonical singleton'],
+              ['MegaQuantHook', '0xB591b5096dA183Fa8d2F4C916Dcb0B4904f6f0c0', 'CREATE2 salt: 39636'],
+              ['MegaQuantRouter', '0x608AEfA1DFD3621554a948E20159eB243C76235F', 'Standard CREATE'],
+              ['PoolRegistry', '0x680762A631334098eeF5F24EAAafac0F07Cb2e3a', 'Standard CREATE'],
+            ]}
+          />
+          <p className="text-xs text-text-secondary leading-relaxed mt-2 mb-4">
+            Explorer: <code className="bg-background px-1 py-0.5 rounded font-mono">https://sepolia.uniscan.xyz/address/{'<address>'}</code>
+          </p>
+
+          <h3 className="text-sm font-semibold mt-6 mb-2">Mainnet</h3>
+          <DocTable
+            headers={['Chain', 'MegaQuantHook', 'MegaQuantRouter', 'PoolRegistry']}
+            rows={[
+              ['Unichain (130)', 'Pending', 'Pending', 'Pending'],
+              ['Base (8453)', 'Pending', 'Pending', 'Pending'],
             ]}
           />
 
-          <h3 className="text-sm font-semibold mt-6 mb-2">Router Contract</h3>
+          <h3 className="text-sm font-semibold mt-6 mb-2">Router & Registry Functions</h3>
           <DocTable
             headers={['Function', 'Description']}
             rows={[
               ['swap()', 'Single swap with dynamic fee'],
-              ['batchSwap()', 'Multiple swaps in one tx (gas savings via flash accounting)'],
-              ['placeLimitOrder()', 'Convenience wrapper for hook\'s placeOrder()'],
+              ['batchSwap()', 'Multiple swaps in one tx (flash accounting)'],
+              ['placeLimitOrder()', 'Wrapper for hook.placeOrder()'],
+              ['placeStopOrder()', 'Wrapper for hook.placeStopOrder()'],
+              ['placeBracketOrder()', 'Places limit + stop, links via setBracketPartner()'],
+              ['PoolRegistry.createPool()', 'Register + optionally initialize a pool'],
+              ['PoolRegistry.getPools()', 'Discover registered pools'],
             ]}
           />
           <p className="text-xs text-text-secondary leading-relaxed mt-3">
@@ -1766,53 +2606,52 @@ console.log('Net realized:', realizedPnl, '(fees:', totalFees, ')')`}
         <>
           <DocHeader title="Example: Limit Grid" />
           <CodeBlock
-            title="Place grid of V4 hook limit orders"
+            title="Place grid of V4 hook limit orders (Unichain Sepolia)"
             code={`async function execute(dt) {
-  // NOTE: Requires deployed MegaQuantRouter and MegaQuantHook addresses
-  const routerAddress = '0x...'  // Your MegaQuantRouter deployment
-  const hookAddress = '0x...'    // Your MegaQuantHook deployment
+  const EXPLORER = 'https://sepolia.uniscan.xyz'
+  const v4 = dt['unichain-sepolia'].uniswapV4
 
-  // Place a grid of limit buy orders at descending ticks
-  const baseTick = -200000
-  const tickSpacing = 100  // 1% apart
-  const amountPerOrder = '0.5' // 0.5 WETH per level
+  // Read current pool state to place orders relative to current tick
+  const pool = await v4.getPoolInfo('WETH', 'USDC')
+  console.log('Current tick:', pool.currentTick, '| Fee:', pool.feePercentage)
 
+  // Place a grid of limit sell orders at ascending ticks (above current price)
+  const tickSpacing = 10
+  const amountPerOrder = '0.001'
   const orders = []
-  for (let i = 1; i <= 5; i++) {
-    const tick = baseTick - (i * tickSpacing)
-    const order = await dt.ethereum.uniswapV4.limitOrder({
-      tokenIn: 'WETH',
-      tokenOut: 'USDC',
-      amountIn: amountPerOrder,
-      targetPrice: '2000',
-      tick,
-      deadline: 3600
-    }, routerAddress)
-    orders.push(order)
-    console.log('Placed order at tick', tick, '- ID:', order.orderId, 'Tx:', order.txHash)
-  }
 
+  console.log('\\nPlacing grid of 5 limit orders...')
+  for (let i = 1; i <= 5; i++) {
+    const tick = pool.currentTick + (i * tickSpacing)
+    const order = await v4.limitOrder({
+      tokenIn: 'WETH', tokenOut: 'USDC',
+      amountIn: amountPerOrder, tick, deadline: 3600
+    })
+    orders.push(order)
+    console.log('  Level ' + i + ': tick=' + tick + ' | ID=' + order.orderId.slice(0, 16) + '...')
+    console.log('    TX: ' + EXPLORER + '/tx/' + order.txHash)
+  }
   console.log('Grid placed:', orders.length, 'orders')
 
   // Monitor fills
-  await sleep(60000) // Wait 1 minute
+  console.log('\\nWaiting 60s for fills...')
+  await sleep(60000)
 
-  const pending = dt.orders.getPending()
-  const { orders: filled } = dt.orders.getHistory()
-  console.log('Pending:', pending.length, 'Filled:', filled.length)
+  const hookOrders = await v4.getMyHookOrders()
+  const pending = hookOrders.filter(o => o.status === 'pending')
+  const filled = hookOrders.filter(o => o.status === 'filled')
+  console.log('Pending:', pending.length, '| Filled:', filled.length)
 
   // Cancel unfilled orders
+  console.log('\\nCancelling unfilled orders...')
   for (const order of pending) {
-    await dt.ethereum.uniswapV4.cancelLimitOrder(
-      order.assetSymbol === 'WETH' ? 'WETH' : 'USDC',
-      order.assetSymbol === 'WETH' ? 'USDC' : 'WETH',
-      order.tick,
-      hookAddress
+    const cancel = await v4.cancelLimitOrder(
+      order.tokenIn || 'WETH',
+      order.tokenOut || 'USDC',
+      order.tick
     )
-    console.log('Cancelled:', order.id)
+    console.log('  Cancelled tick=' + order.tick + ' | TX: ' + EXPLORER + '/tx/' + cancel.txHash)
   }
-
-  await dt.close()
 }`}
           />
         </>
@@ -2676,12 +3515,12 @@ function CodeBlock({ title, code }: { title: string; code: string }) {
 
 function DocTable({ headers, rows }: { headers: string[]; rows: string[][] }) {
   return (
-    <div className="rounded border border-border bg-surface overflow-hidden">
-      <table className="w-full text-2xs">
+    <div className="rounded border border-border bg-surface overflow-x-auto">
+      <table className="min-w-full text-2xs">
         <thead>
           <tr className="border-b border-border bg-surface-hover">
             {headers.map((h, i) => (
-              <th key={i} className="text-left px-3 py-1.5 font-semibold text-text-tertiary uppercase tracking-wider">
+              <th key={i} className="text-left px-3 py-1.5 font-semibold text-text-tertiary uppercase tracking-wider whitespace-nowrap">
                 {h}
               </th>
             ))}
@@ -2691,7 +3530,7 @@ function DocTable({ headers, rows }: { headers: string[]; rows: string[][] }) {
           {rows.map((row, i) => (
             <tr key={i} className="border-b border-border last:border-0">
               {row.map((cell, j) => (
-                <td key={j} className="px-3 py-1.5 text-text-secondary">
+                <td key={j} className="px-3 py-1.5 text-text-secondary whitespace-nowrap font-mono">
                   {cell}
                 </td>
               ))}

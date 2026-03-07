@@ -4,6 +4,7 @@
 import vm from 'node:vm'
 import { createDeltaTrade } from '../trading/DeltaTrade.js'
 import { getDatabase } from '../../db/index.js'
+import { buildStrategyAddresses } from './strategy-addresses.js'
 import type { DeltaTrade } from '../trading/DeltaTrade.js'
 
 // ============================================================
@@ -157,6 +158,9 @@ export class StrategyRunner {
         this.deltaTrade = await createDeltaTrade(executionType, this.strategyId)
         this.pushLog('info', `DeltaTrade ready (execution: ${this.deltaTrade.executionId})`)
       } catch (dtErr: any) {
+        if (dtErr.message?.includes('locked')) {
+          throw new Error('App is locked. Please unlock the app before running strategies.')
+        }
         this.pushLog('warn', `DeltaTrade not available: ${dtErr.message}`)
         this.pushLog('info', 'Running strategy without trading context (dt will be null)')
         this.deltaTrade = null
@@ -437,6 +441,7 @@ export class StrategyRunner {
     const sandbox = {
       console: sandboxConsole,
       dt,
+      addresses: buildStrategyAddresses(),
       sleep,
       checkPause,
       setTimeout: trackedSetTimeout,

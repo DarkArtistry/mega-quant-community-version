@@ -74,7 +74,23 @@
       "WebFetch(domain:support.deribit.com)",
       "Bash(sqlite3 $DB_PATH:*)",
       "Bash(sqlite3:*)",
-      "Bash(npx tsx:*)"
+      "Bash(npx tsx:*)",
+      "Bash(PRIVATE_KEY=0x5b0eacea35dbbd69d0d9d472f0fffaf7b7143251527644c0eac8f23b6f88f732 forge script:*)",
+      "Bash(PRIVATE_KEY=0x5b0eacea35dbbd69d0d9d472f0fffaf7b7143251527644c0eac8f23b6f88f732 POOL_MANAGER=0x000000000004444c5dc75cB358380D2e3dE08A90 forge script:*)",
+      "Bash(PRIVATE_KEY=0x5b0eacea35dbbd69d0d9d472f0fffaf7b7143251527644c0eac8f23b6f88f732 POOL_MANAGER=0x000000000004444c5dc75cB358380D2e3dE08A90 HOOK_ADDRESS=0x0F0d91f20939195CB877Ac86cE042a4E80e530C0 forge script:*)",
+      "Bash(cast balance:*)",
+      "Bash(cast call:*)",
+      "Bash(PRIVATE_KEY=0x5b0eacea35dbbd69d0d9d472f0fffaf7b7143251527644c0eac8f23b6f88f732 POOL_MANAGER=0xC81462Fec8B23319F288047f8A03A57682a35C1A forge script:*)",
+      "Bash(PRIVATE_KEY=0x5b0eacea35dbbd69d0d9d472f0fffaf7b7143251527644c0eac8f23b6f88f732 POOL_MANAGER=0xC81462Fec8B23319F288047f8A03A57682a35C1A HOOK_ADDRESS=0x2A746814030fFBD78d416b4b54060E24B37af0c0 forge script:*)",
+      "Bash(python3:*)",
+      "Bash(cast send:*)",
+      "Bash(PRIVATE_KEY=0x5b0eacea35dbbd69d0d9d472f0fffaf7b7143251527644c0eac8f23b6f88f732 POOL_MANAGER=0x00b036b58a818b1bc34d502d3fe730db729e62ac forge script:*)",
+      "Bash(PRIVATE_KEY=0x5b0eacea35dbbd69d0d9d472f0fffaf7b7143251527644c0eac8f23b6f88f732 POOL_MANAGER=0x00b036b58a818b1bc34d502d3fe730db729e62ac HOOK_ADDRESS=0xB591b5096dA183Fa8d2F4C916Dcb0B4904f6f0c0 forge script:*)",
+      "WebFetch(domain:sepolia.uniscan.xyz)",
+      "Bash(forge:*)",
+      "Bash(cast to-check-sum-address:*)",
+      "Bash(cast:*)",
+      "Bash(test:*)"
     ]
   }
 }

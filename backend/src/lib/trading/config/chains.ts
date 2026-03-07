@@ -101,6 +101,9 @@ export interface ChainConfig {
     quoter: string // V4Quoter for getting swap quotes
     stateView: string
     swapRouter?: string // Optional: Custom SwapRouter contract
+    megaQuantHook?: string      // Deployed MegaQuantHook address
+    megaQuantRouter?: string    // Deployed MegaQuantRouter address
+    poolRegistry?: string       // Deployed PoolRegistry address
   }
   oneInchSupported: boolean
   aaveV3?: {
@@ -296,11 +299,14 @@ const CHAIN_CONFIGS_TEMPLATE: Record<string, ChainConfig> = {
       nftPositionManager: '0x943e6e07a7e880e09e0b8b40ef1e7d8e97e09bfa',
     },
     uniswapV4: {
-      poolManager: '0xC81462Fec8B23319F288047f8A03A57682a35C1A',
-      positionManager: '0xB433cB9BcEF07d25E33A42C793C746C8f10EC103',
+      poolManager: '0x00b036b58a818b1bc34d502d3fe730db729e62ac',
+      positionManager: '0xf969aee60879c54baaed9f3ed26147db216fd664',
       universalRouter: '0xf70536B3bcC1bD1a972dc186A2cf84cC6da6Be5D',
-      quoter: '0xf3a39C86DfEd7B1A740f9D3fb4046B8dD8d3267C',
-      stateView: '0x0000000000000000000000000000000000000000',
+      quoter: '0x56dcd40a3f2d466f48e7f48bdbe5cc9b92ae4472',
+      stateView: '0xc199f1072a74d4e905aba1a84d9a45e2546b6222',
+      megaQuantHook: '0xB591b5096dA183Fa8d2F4C916Dcb0B4904f6f0c0',
+      megaQuantRouter: '0x608AEfA1DFD3621554a948E20159eB243C76235F',
+      poolRegistry: '0x680762A631334098eeF5F24EAAafac0F07Cb2e3a',
     },
     oneInchSupported: false,
   }

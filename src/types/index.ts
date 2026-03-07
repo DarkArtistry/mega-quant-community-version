@@ -126,6 +126,7 @@ export interface Order {
   account_id?: string
   strategy_name?: string
   linked_order_id?: string
+  hook_order_id?: string
 }
 
 export interface Account {

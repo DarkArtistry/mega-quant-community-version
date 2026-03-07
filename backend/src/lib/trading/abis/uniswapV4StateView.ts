@@ -45,21 +45,10 @@ export const UNISWAP_V4_STATE_VIEW_ABI = [
     stateMutability: 'view',
     type: 'function'
   },
-  // Get pool slot0
+  // Get pool slot0 (PoolId is bytes32)
   {
     inputs: [
-      {
-        components: [
-          { internalType: 'address', name: 'currency0', type: 'address' },
-          { internalType: 'address', name: 'currency1', type: 'address' },
-          { internalType: 'uint24', name: 'fee', type: 'uint24' },
-          { internalType: 'int24', name: 'tickSpacing', type: 'int24' },
-          { internalType: 'address', name: 'hooks', type: 'address' }
-        ],
-        internalType: 'struct PoolKey',
-        name: 'key',
-        type: 'tuple'
-      }
+      { internalType: 'PoolId', name: 'poolId', type: 'bytes32' }
     ],
     name: 'getSlot0',
     outputs: [
@@ -71,21 +60,10 @@ export const UNISWAP_V4_STATE_VIEW_ABI = [
     stateMutability: 'view',
     type: 'function'
   },
-  // Get pool liquidity
+  // Get pool liquidity (PoolId is bytes32)
   {
     inputs: [
-      {
-        components: [
-          { internalType: 'address', name: 'currency0', type: 'address' },
-          { internalType: 'address', name: 'currency1', type: 'address' },
-          { internalType: 'uint24', name: 'fee', type: 'uint24' },
-          { internalType: 'int24', name: 'tickSpacing', type: 'int24' },
-          { internalType: 'address', name: 'hooks', type: 'address' }
-        ],
-        internalType: 'struct PoolKey',
-        name: 'key',
-        type: 'tuple'
-      }
+      { internalType: 'PoolId', name: 'poolId', type: 'bytes32' }
     ],
     name: 'getLiquidity',
     outputs: [{ internalType: 'uint128', name: 'liquidity', type: 'uint128' }],

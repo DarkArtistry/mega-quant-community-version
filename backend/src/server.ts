@@ -25,6 +25,7 @@ import walletsRouter from './routes/wallets.js'
 import perpsRouter from './routes/perps.js'
 import optionsRouter from './routes/options.js'
 import lendingRouter from './routes/lending.js'
+import liquidityRouter from './routes/liquidity.js'
 import { strategyRunnerManager } from './lib/strategy/StrategyRunner.js'
 import { pnlSnapshotter } from './lib/trading/pnl/PnlSnapshotter.js'
 import { orderReconciler } from './services/order-reconciler.js'
@@ -82,6 +83,7 @@ app.use('/api/wallets', walletsRouter)
 app.use('/api/perps', perpsRouter)
 app.use('/api/options', optionsRouter)
 app.use('/api/lending', lendingRouter)
+app.use('/api/liquidity', liquidityRouter)
 
 // Error handling middleware
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
