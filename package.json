@@ -86,11 +86,16 @@
     ],
     "extraResources": [
       {
-        "from": "build/backend/",
-        "to": "backend",
-        "filter": [
-          "**/*"
-        ]
+        "from": "build/backend/dist",
+        "to": "backend/dist"
+      },
+      {
+        "from": "build/backend/node_modules",
+        "to": "backend/node_modules"
+      },
+      {
+        "from": "build/backend/package.json",
+        "to": "backend/package.json"
       },
       {
         "from": "build/nodejs/",
