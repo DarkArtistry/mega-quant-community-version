@@ -14,7 +14,7 @@ jobs:
           - os: macos-latest
             platform: mac
             script: "npm run predist:mac && npx electron-builder --mac --arm64"
-          - os: macos-13
+          - os: macos-latest
             platform: mac-x64
             script: "npm run predist:mac:x64 && npx electron-builder --mac --x64"
           - os: windows-latest
