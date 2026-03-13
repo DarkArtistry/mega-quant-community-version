@@ -104,6 +104,7 @@
     "mac": {
       "target": "dmg",
       "identity": "-",
+      "icon": "assets/icon.icns",
       "category": "public.app-category.finance"
     },
     "win": {
@@ -117,7 +118,7 @@
           "arch": ["x64"]
         }
       ],
-      "icon": "build/icon.ico"
+      "icon": "assets/icon.ico"
     },
     "nsis": {
       "oneClick": false,
@@ -137,7 +138,7 @@
         }
       ],
       "category": "Finance",
-      "icon": "build/icons"
+      "icon": "assets/icons"
     }
   }
 }

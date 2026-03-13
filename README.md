@@ -1,5 +1,9 @@
 # MEGA QUANT
 
+<p align="center">
+  <img src="assets/icon.png" alt="MEGA QUANT" width="128" height="128">
+</p>
+
 Enterprise quantitative trading platform with multi-protocol DEX/CEX execution, real-time price aggregation, sandboxed strategy scripting, and Uniswap V4 Hook development — packaged as an Electron desktop app.
 
 ## Download
