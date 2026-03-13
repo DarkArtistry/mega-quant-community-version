@@ -16,9 +16,17 @@
     "electron:dev": "concurrently -n \"backend,vite,electron\" -c \"yellow,green,blue\" \"npm run backend:dev\" \"vite\" \"sleep 3 && electron .\"",
     "start": "npm run electron:dev",
     "prepare:backend": "bash scripts/prepare-backend.sh",
-    "predist": "npm run build && npm run prepare:backend",
-    "dist": "electron-builder --mac",
-    "dist:dir": "electron-builder --mac --dir",
+    "predist": "npm run build",
+    "predist:mac": "npm run build && bash scripts/prepare-backend.sh --platform darwin --arch arm64",
+    "predist:mac:x64": "npm run build && bash scripts/prepare-backend.sh --platform darwin --arch x64",
+    "predist:win": "npm run build && bash scripts/prepare-backend.sh --platform win32 --arch x64",
+    "predist:linux": "npm run build && bash scripts/prepare-backend.sh --platform linux --arch x64",
+    "dist": "npm run predist:mac && electron-builder --mac",
+    "dist:mac": "npm run predist:mac && electron-builder --mac",
+    "dist:mac:x64": "npm run predist:mac:x64 && electron-builder --mac --x64",
+    "dist:win": "npm run predist:win && electron-builder --win",
+    "dist:linux": "npm run predist:linux && electron-builder --linux",
+    "dist:dir": "electron-builder --dir",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0"
   },
   "dependencies": {
@@ -91,9 +99,47 @@
     ],
     "asar": true,
     "mac": {
-      "target": "dmg",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["arm64", "x64"]
+        }
+      ],
       "identity": null,
       "category": "public.app-category.finance"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        },
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": ["x64"]
+        },
+        {
+          "target": "deb",
+          "arch": ["x64"]
+        }
+      ],
+      "category": "Finance",
+      "icon": "build/icons"
     }
   }
 }

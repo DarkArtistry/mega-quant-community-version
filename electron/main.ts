@@ -37,7 +37,9 @@ function startBackendServer(): Promise<void> {
       setTimeout(() => resolve(), 2000)
     } else {
       const backendDir = path.join(process.resourcesPath, 'backend')
-      const nodeBinaryPath = path.join(process.resourcesPath, 'nodejs/bin/node')
+      const nodeBinaryPath = process.platform === 'win32'
+        ? path.join(process.resourcesPath, 'nodejs', 'node.exe')
+        : path.join(process.resourcesPath, 'nodejs', 'bin', 'node')
 
       backendProcess = spawn(nodeBinaryPath, ['dist/server.js'], {
         cwd: backendDir,
@@ -117,8 +119,9 @@ function createWindow() {
       contextIsolation: true,
       sandbox: false,
     },
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 15, y: 12 },
+    ...(process.platform === 'darwin'
+      ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 15, y: 12 } }
+      : { frame: true }),
     show: false,
   })
 
