@@ -2,6 +2,23 @@
 
 Enterprise quantitative trading platform with multi-protocol DEX/CEX execution, real-time price aggregation, sandboxed strategy scripting, and Uniswap V4 Hook development — packaged as an Electron desktop app.
 
+## Download
+
+Download the latest release for your platform — no Node.js or other dependencies required. Just install and run.
+
+| Platform | Download | Notes |
+|----------|----------|-------|
+| **macOS (Apple Silicon)** | [MEGA QUANT-0.1.0-arm64.dmg](https://github.com/DarkArtistry/mega-quant-community-version/releases/download/v0.1.0/MEGA.QUANT-0.1.0-arm64.dmg) | M1/M2/M3/M4 Macs |
+| **macOS (Intel)** | [MEGA QUANT-0.1.0.dmg](https://github.com/DarkArtistry/mega-quant-community-version/releases/download/v0.1.0/MEGA.QUANT-0.1.0.dmg) | Intel Macs |
+| **Windows (Installer)** | [MEGA QUANT Setup 0.1.0.exe](https://github.com/DarkArtistry/mega-quant-community-version/releases/download/v0.1.0/MEGA.QUANT.Setup.0.1.0.exe) | Standard installer |
+| **Windows (Portable)** | [MEGA QUANT 0.1.0.exe](https://github.com/DarkArtistry/mega-quant-community-version/releases/download/v0.1.0/MEGA.QUANT.0.1.0.exe) | No install needed, run directly |
+| **Linux (AppImage)** | [MEGA QUANT-0.1.0.AppImage](https://github.com/DarkArtistry/mega-quant-community-version/releases/download/v0.1.0/MEGA.QUANT-0.1.0.AppImage) | Works on most distros |
+| **Linux (Debian/Ubuntu)** | [mega-quant_0.1.0_amd64.deb](https://github.com/DarkArtistry/mega-quant-community-version/releases/download/v0.1.0/mega-quant_0.1.0_amd64.deb) | `sudo dpkg -i mega-quant_0.1.0_amd64.deb` |
+
+> All downloads include a bundled Node.js runtime and SQLite — everything runs self-contained.
+>
+> [View all releases](https://github.com/DarkArtistry/mega-quant-community-version/releases)
+
 ## Tech Stack
 
 | Layer | Technology |
@@ -18,11 +35,12 @@ Enterprise quantitative trading platform with multi-protocol DEX/CEX execution, 
 | Charts | Lightweight Charts |
 | Smart Contracts | Solidity (Foundry/Forge) |
 
-## Prerequisites
+## Prerequisites (for development)
+
+> If you just want to **use** the app, download it from the [Download](#download) section above. No prerequisites needed.
 
 - **Node.js** >= 18
 - **npm** >= 9
-- macOS (Electron builder currently targets DMG)
 
 ## Getting Started
 
@@ -67,8 +85,11 @@ npm run build
 # Build backend
 npm run build:backend
 
-# Build macOS DMG
-npm run dist
+# Build desktop app (current platform)
+npm run dist          # macOS (arm64)
+npm run dist:mac:x64  # macOS (Intel)
+npm run dist:win      # Windows
+npm run dist:linux    # Linux
 ```
 
 ## Project Structure
