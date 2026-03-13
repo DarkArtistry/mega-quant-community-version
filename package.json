@@ -103,7 +103,7 @@
     "asar": true,
     "mac": {
       "target": "dmg",
-      "identity": null,
+      "identity": "-",
       "category": "public.app-category.finance"
     },
     "win": {
