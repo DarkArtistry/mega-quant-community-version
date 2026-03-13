@@ -15,6 +15,7 @@ export interface SwapParams {
 export interface SwapResult {
   success: boolean
   transactionHash: string
+  txHash?: string              // alias for strategy convenience
   blockNumber: number
   amountIn: string
   amountOut: string
