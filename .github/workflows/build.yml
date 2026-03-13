@@ -14,16 +14,16 @@ jobs:
         include:
           - os: macos-latest
             platform: mac
-            script: "npm run predist:mac && npx electron-builder --mac --arm64"
+            script: "npm run predist:mac && npx electron-builder --mac --arm64 --publish never"
           - os: macos-latest
             platform: mac-x64
-            script: "npm run predist:mac:x64 && npx electron-builder --mac --x64"
+            script: "npm run predist:mac:x64 && npx electron-builder --mac --x64 --publish never"
           - os: windows-latest
             platform: win
-            script: "npm run predist:win && npx electron-builder --win"
+            script: "npm run predist:win && npx electron-builder --win --publish never"
           - os: ubuntu-latest
             platform: linux
-            script: "npm run predist:linux && npx electron-builder --linux"
+            script: "npm run predist:linux && npx electron-builder --linux --publish never"
 
     runs-on: ${{ matrix.os }}
 

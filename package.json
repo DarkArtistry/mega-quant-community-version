@@ -5,7 +5,10 @@
   "type": "module",
   "main": "dist-electron/main.js",
   "description": "Enterprise Quant Trading Platform + Uniswap V4 Hooks",
-  "author": "MegaQuant Team",
+  "author": {
+    "name": "MegaQuant Team",
+    "email": "megaquant@proton.me"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
